@@ -65,3 +65,4 @@ git push origin v1.1.0
 | 日期 | 版本 / Tag | 分支 | Commit | 同步内容摘要 | 验证状态 |
 |---|---|---|---|---|---|
 | 2026-11-22 | `v1.0.0` | `main` | `65b84fb` | 第一版完整跑通并首次同步：电脑本地 HTTP 服务（`sync_server/`）、Kindle KOReader 插件（`koreader_plugin/`，含 KT2 `ui/uimanager` 等真机修复）、Chrome MV3 扩展（`chrome_extension/`）、KOReader 离线安装脚本（`工具/install_ko.py`）及公开仓库脱敏配置 | 已通过真机端到端同步测试 |
+| 2026-11-22 | `v1.1.0` | `main` | `a6611bd` | 新增本地电子书局域网流式同步（`data/books/`）、Chrome 本地 Obsidian 多选批量同步、原生弹窗选择/新建分类子文件夹（`POST /api/folders/pick`）及全链路多级子文件夹同步与保留分类归档、Kindle 主页 5 键与「一键全部同步 / 同步地址」通用 Dispatcher 快捷动作，并新增交互式项目展示页 [`docs/showcase.html`](docs/showcase.html) | 已通过全链路自动化校验与 Kindle 真机实测 |
