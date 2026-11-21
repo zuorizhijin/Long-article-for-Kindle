@@ -64,4 +64,4 @@ git push origin v1.1.0
 
 | 日期 | 版本 / Tag | 分支 | Commit | 同步内容摘要 | 验证状态 |
 |---|---|---|---|---|---|
-| 2026-11-22 | `v1.0.0` | `main` | *(首次推送后回填)* | 第一版完整跑通并首次同步：电脑本地 HTTP 服务（`sync_server/`）、Kindle KOReader 插件（`koreader_plugin/`，含 KT2 `ui/uimanager` 等真机修复）、Chrome MV3 扩展（`chrome_extension/`）、KOReader 离线安装脚本（`工具/install_ko.py`）及公开仓库脱敏配置 | 已通过真机端到端同步测试 |
+| 2026-11-22 | `v1.0.0` | `main` | `65b84fb` | 第一版完整跑通并首次同步：电脑本地 HTTP 服务（`sync_server/`）、Kindle KOReader 插件（`koreader_plugin/`，含 KT2 `ui/uimanager` 等真机修复）、Chrome MV3 扩展（`chrome_extension/`）、KOReader 离线安装脚本（`工具/install_ko.py`）及公开仓库脱敏配置 | 已通过真机端到端同步测试 |
