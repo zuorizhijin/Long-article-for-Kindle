@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Kindle Article Sync</title>
+  <link rel="stylesheet" href="popup.css" />
+</head>
+<body>
+  <div class="app">
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-title">Kindle Article Sync</span>
+      </div>
+      <div class="topbar-right">
+        <button id="healthBadge" class="health-badge checking" title="点击刷新服务状态">
+          <span class="dot"></span>
+          <span id="healthText">检测中...</span>
+        </button>
+        <button id="toggleSettingsBtn" class="icon-btn" title="服务地址设置">⚙</button>
+      </div>
+    </header>
+
+    <section id="settingsPanel" class="settings-panel hidden">
+      <label class="field-label" for="serverUrlInput">PC 同步服务地址</label>
+      <div class="row">
+        <input id="serverUrlInput" type="url" placeholder="http://127.0.0.1:8765" />
+        <button id="saveServerBtn" class="btn btn-small">保存并检测</button>
+      </div>
+    </section>
+
+    <nav class="tabs">
+      <button id="tabBtnWeb" class="tab-btn active" data-tab="web">网页 / X 长文章</button>
+      <button id="tabBtnObsidian" class="tab-btn" data-tab="obsidian">本地 Obsidian MD</button>
+    </nav>
+
+    <!-- Tab 1: Web / X Articles -->
+    <main id="panelWeb" class="panel">
+      <div class="info-row">
+        <span id="pageModeBadge" class="mode-badge">检测页面中...</span>
+        <button id="reExtractBtn" class="link-btn">重新抓取</button>
+      </div>
+
+      <div id="webErrorBox" class="alert alert-error hidden"></div>
+
+      <div id="webPreviewBox" class="card hidden">
+        <label class="field-label" for="webTitleInput">文章标题</label>
+        <input id="webTitleInput" type="text" />
+        <div class="meta-line">
+          <span>作者：<strong id="webAuthorText">-</strong></span>
+          <span>图片：<strong id="webImgCount">0</strong> 张</span>
+        </div>
+        <div id="webSnippet" class="snippet"></div>
+      </div>
+
+      <div class="actions">
+        <button id="webSendBtn" class="btn btn-primary" disabled>生成 EPUB 并发送到电脑</button>
+        <button id="webDownloadBtn" class="btn btn-secondary" disabled>下载 EPUB</button>
+      </div>
+    </main>
+
+    <!-- Tab 2: Local Obsidian Markdown -->
+    <main id="panelObsidian" class="panel hidden">
+      <div class="vault-bar">
+        <div class="vault-status">
+          <span id="vaultNameText">未授权文件夹（点击右侧选择你的 Obsidian 知识库目录）</span>
+        </div>
+        <div class="vault-btns">
+          <button id="pickVaultBtn" class="btn btn-small">选择文件夹</button>
+          <button id="grantVaultBtn" class="btn btn-small btn-warn hidden">恢复权限</button>
+          <button id="openTabBtn" class="link-btn" title="如弹窗在系统选择框打开时自动关闭，请点此在标签页中操作">独立标签页</button>
+        </div>
+      </div>
+
+      <div id="obsidianSearchWrap" class="hidden">
+        <input id="mdSearchInput" type="search" placeholder="搜索 .md 笔记文件名或路径..." />
+        <div id="mdFileCount" class="muted-small"></div>
+        <ul id="mdFileList" class="file-list"></ul>
+      </div>
+
+      <div id="mdSelectedBox" class="card hidden">
+        <label class="field-label" for="mdTitleInput">EPUB 标题</label>
+        <input id="mdTitleInput" type="text" />
+        <div class="meta-line">
+          <span>文件：<strong id="mdSelectedPath">-</strong></span>
+        </div>
+      </div>
+
+      <div class="actions">
+        <button id="mdSendBtn" class="btn btn-primary" disabled>转换并发送到电脑</button>
+        <button id="mdDownloadBtn" class="btn btn-secondary" disabled>下载 EPUB</button>
+      </div>
+    </main>
+
+    <footer id="statusBar" class="status-bar hidden"></footer>
+  </div>
+
+  <script src="lib/idb_store.js"></script>
+  <script src="lib/epub_builder.js"></script>
+  <script src="lib/markdown.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html>

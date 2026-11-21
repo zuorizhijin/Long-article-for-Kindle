@@ -1,0 +1,28 @@
+# 个人备份、电子书、笔记与照片
+Kindle备份_*/
+阅读版/
+md转Kindle/
+IMG_*.jpg
+*.azw3
+*.epub
+*.bin
+*.kpkg
+
+# 个人本地配置与进度记录（公开仓库不提交）
+sync_server/config.json
+项目进度.md
+
+# 同步服务运行期数据与 Python 缓存
+sync_server/data/
+sync_server/__pycache__/
+**/__pycache__/
+*.py[cod]
+
+# 工具与编辑器本地配置
+.obsidian/
+.claude/
+.DS_Store
+Thumbs.db
+
+# 临时演示文件
+Kindle_A1_运作流程演示.html
