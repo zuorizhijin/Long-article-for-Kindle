@@ -158,6 +158,15 @@ foreach ($f in $RequiredFiles) {
 
 Write-Host "[安装成功] 已将 articlesync.koplugin 安装到: $DestDir" -ForegroundColor Green
 
+$DocSubDirs = @("documents\文章", "documents\已读", "documents\电子书")
+foreach ($sub in $DocSubDirs) {
+    $docPath = Join-Path "$KindleDrive\" $sub
+    if (-not (Test-Path $docPath)) {
+        New-Item -ItemType Directory -Path $docPath -Force | Out-Null
+        Write-Host "[目录初始化] 已创建: $docPath" -ForegroundColor Cyan
+    }
+}
+
 if (-not $SkipServerUrl) {
     $lanIp = Get-ActiveLanIPv4
     if ($lanIp) {

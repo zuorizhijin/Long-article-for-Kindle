@@ -1,0 +1,480 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Long Article for Kindle v1.1.0 — 交互式项目展示</title>
+  <style>
+    :root {
+      --bg: #f8fafc;
+      --card: #ffffff;
+      --border: #e2e8f0;
+      --text: #0f172a;
+      --muted: #475569;
+      --primary: #2563eb;
+      --primary-soft: #eff6ff;
+      --primary-text: #ffffff;
+      --code-bg: #f1f5f9;
+      --ok: #16a34a;
+      --warn: #d97706;
+      --err: #dc2626;
+      --shadow: 0 6px 24px rgba(15, 23, 42, 0.06);
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #0b1120;
+        --card: #111827;
+        --border: #1f2937;
+        --text: #f1f5f9;
+        --muted: #94a3b8;
+        --primary: #3b82f6;
+        --primary-soft: #172554;
+        --primary-text: #ffffff;
+        --code-bg: #0f172a;
+        --ok: #4ade80;
+        --warn: #fbbf24;
+        --err: #f87171;
+        --shadow: 0 8px 28px rgba(0, 0, 0, 0.35);
+      }
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+    }
+    .wrap {
+      max-width: 980px;
+      margin: 0 auto;
+      padding: 36px 20px 64px;
+    }
+    header {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      margin-bottom: 28px;
+    }
+    .badge {
+      display: inline-block;
+      padding: 3px 10px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 700;
+      background: var(--primary);
+      color: var(--primary-text);
+      vertical-align: middle;
+      margin-right: 8px;
+    }
+    h1 {
+      margin: 0;
+      font-size: 26px;
+      letter-spacing: -0.02em;
+    }
+    .subtitle {
+      margin: 6px 0 0;
+      color: var(--muted);
+      font-size: 14px;
+    }
+    .tabs {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .tab-btn {
+      border: 1px solid var(--border);
+      background: var(--card);
+      color: var(--muted);
+      padding: 8px 14px;
+      border-radius: 10px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+    .tab-btn.active {
+      background: var(--primary);
+      border-color: var(--primary);
+      color: var(--primary-text);
+    }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 22px;
+      box-shadow: var(--shadow);
+      margin-bottom: 20px;
+    }
+    .grid-4 {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+      margin-bottom: 18px;
+    }
+    .grid-2 {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 16px;
+    }
+    .grid-5 {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 10px;
+    }
+    @media (max-width: 720px) {
+      .grid-4, .grid-2 { grid-template-columns: 1fr; }
+      .grid-5 { grid-template-columns: repeat(2, 1fr); }
+    }
+    .step-card {
+      border: 1px solid var(--border);
+      background: var(--bg);
+      border-radius: 12px;
+      padding: 14px;
+      text-align: left;
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+    .step-card.active {
+      border-color: var(--primary);
+      background: var(--primary-soft);
+      box-shadow: 0 0 0 1px var(--primary);
+    }
+    .step-num { font-size: 12px; color: var(--muted); }
+    .step-name { font-size: 14px; font-weight: 700; margin-top: 4px; color: var(--text); }
+    .detail-box {
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 18px;
+      background: var(--bg);
+    }
+    .detail-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-bottom: 8px;
+    }
+    .pill {
+      font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+      font-size: 12px;
+      padding: 3px 8px;
+      border-radius: 6px;
+      background: var(--code-bg);
+      border: 1px solid var(--border);
+      color: var(--text);
+    }
+    pre {
+      margin: 12px 0 0;
+      padding: 12px;
+      border-radius: 10px;
+      background: var(--code-bg);
+      border: 1px solid var(--border);
+      font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+      font-size: 12px;
+      overflow-x: auto;
+      color: var(--text);
+    }
+    .controls {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-top: 14px;
+      font-size: 13px;
+      color: var(--muted);
+    }
+    .btn {
+      border: 1px solid var(--border);
+      background: var(--card);
+      color: var(--text);
+      padding: 6px 12px;
+      border-radius: 8px;
+      font-size: 13px;
+      cursor: pointer;
+    }
+    .btn-primary {
+      background: var(--primary);
+      border-color: var(--primary);
+      color: var(--primary-text);
+    }
+    .eink-frame {
+      border: 2px solid var(--border);
+      border-radius: 18px;
+      padding: 18px;
+      background: var(--bg);
+    }
+    .k-btn {
+      border: 1px solid var(--border);
+      background: var(--card);
+      border-radius: 12px;
+      padding: 14px 8px;
+      text-align: center;
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+    .k-btn.active, .k-btn:hover {
+      border-color: var(--primary);
+      background: var(--primary-soft);
+    }
+    .k-icon { font-size: 22px; }
+    .k-label { font-size: 13px; font-weight: 600; margin-top: 6px; color: var(--text); }
+    .k-output {
+      margin-top: 14px;
+      padding: 14px;
+      border-radius: 10px;
+      background: var(--card);
+      border: 1px solid var(--border);
+    }
+    .panel { display: none; }
+    .panel.active { display: block; }
+    ul { margin: 8px 0 0; padding-left: 20px; color: var(--muted); font-size: 14px; }
+    li { margin-bottom: 6px; }
+    .tag-ok { color: var(--ok); font-weight: 700; }
+    .tag-warn { color: var(--warn); font-weight: 700; }
+    .tag-err { color: var(--err); font-weight: 700; }
+    footer {
+      text-align: center;
+      font-size: 12px;
+      color: var(--muted);
+      margin-top: 28px;
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <div>
+        <h1><span class="badge">v1.1.0</span>Long Article for Kindle</h1>
+        <p class="subtitle">零云盘、零亚马逊依赖的本地长文章与电子书同步系统（Chrome 扩展 + Python 局域网服务 + KOReader 插件）</p>
+      </div>
+      <div class="tabs">
+        <button class="tab-btn active" data-tab="flow">同步全链路</button>
+        <button class="tab-btn" data-tab="kindle">Kindle 主页 5 键</button>
+        <button class="tab-btn" data-tab="rules">格式与删档规则</button>
+      </div>
+    </header>
+
+    <!-- Panel 1: Sync Flow -->
+    <section id="panel-flow" class="panel active">
+      <div class="card">
+        <div class="grid-4">
+          <button class="step-card active" data-step="0">
+            <div class="step-num">Step 1 · 采集与打包</div>
+            <div class="step-name">网页 / Obsidian 批量</div>
+          </button>
+          <button class="step-card" data-step="1">
+            <div class="step-num">Step 2 · 分类入库</div>
+            <div class="step-name">弹窗选/建子文件夹</div>
+          </button>
+          <button class="step-card" data-step="2">
+            <div class="step-num">Step 3 · 局域网中转</div>
+            <div class="step-name">Python 流式同步服务</div>
+          </button>
+          <button class="step-card" data-step="3">
+            <div class="step-num">Step 4 · 离线阅读</div>
+            <div class="step-name">Kindle 一键同步归档</div>
+          </button>
+        </div>
+
+        <div class="detail-box">
+          <div class="detail-head">
+            <strong id="step-title"></strong>
+            <span id="step-badge" class="pill"></span>
+          </div>
+          <p id="step-desc" style="margin:0;color:var(--muted);font-size:14px;"></p>
+          <pre id="step-code"></pre>
+        </div>
+
+        <div class="controls">
+          <span>点击上方步骤卡片或按钮逐步浏览完整链路</span>
+          <div style="display:flex;gap:8px;">
+            <button id="prev-step" class="btn">上一步</button>
+            <button id="next-step" class="btn btn-primary">下一步</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="grid-2">
+        <div class="card">
+          <strong>v1.1.0 核心亮点</strong>
+          <ul>
+            <li><strong>电子书局域网直传</strong>：直接拖入 <code>sync_server/data/books/</code>，支持大文件 64 KiB 分块流式下载。</li>
+            <li><strong>Obsidian 多选批量同步</strong>：复选框多选 / 全选当前筛选结果，顺序转 EPUB 并实时显示进度。</li>
+            <li><strong>原生弹窗选/建分类子文件夹</strong>：无需手打路径，文章与电子书均支持任意子目录原样同步。</li>
+            <li><strong>Kindle 主页 5 键直达</strong>：文章、电子书、已读、一键全部同步、同步地址一屏搞定。</li>
+          </ul>
+        </div>
+        <div class="card">
+          <strong>目录一一对应关系</strong>
+          <pre style="margin-top:10px;">电脑端 sync_server/data/         Kindle /mnt/us/documents/
+├── inbox/（含子文件夹）   ──▶   ├── 文章/（自动建同级子目录）
+├── read/ （保留分类归档） ◀──   ├── 已读/（读完自动移入并回传）
+└── books/（含子文件夹）   ──▶   └── 电子书/（长期保留不移走）</pre>
+        </div>
+      </div>
+    </section>
+
+    <!-- Panel 2: Kindle 5-Button Simulator -->
+    <section id="panel-kindle" class="panel">
+      <div class="card">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex-wrap:wrap;gap:8px;">
+          <strong>Kindle KOReader + SimpleUI 主页快捷操作行模拟</strong>
+          <span style="font-size:13px;color:var(--muted);">点击下方任意按钮预览对应动作与防迷路机制</span>
+        </div>
+        <div class="eink-frame">
+          <div class="grid-5">
+            <button class="k-btn active" data-kbtn="articles">
+              <div class="k-icon">📄</div>
+              <div class="k-label">文章</div>
+            </button>
+            <button class="k-btn" data-kbtn="books">
+              <div class="k-icon">📚</div>
+              <div class="k-label">电子书</div>
+            </button>
+            <button class="k-btn" data-kbtn="read">
+              <div class="k-icon">✅</div>
+              <div class="k-label">已读</div>
+            </button>
+            <button class="k-btn" data-kbtn="sync">
+              <div class="k-icon">🔄</div>
+              <div class="k-label">一键全部同步</div>
+            </button>
+            <button class="k-btn" data-kbtn="ip">
+              <div class="k-icon">🌐</div>
+              <div class="k-label">同步地址</div>
+            </button>
+          </div>
+          <div class="k-output">
+            <div id="k-title" style="font-weight:700;margin-bottom:6px;"></div>
+            <div id="k-body" style="font-size:14px;color:var(--muted);"></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Panel 3: Formats & Deletion Rules -->
+    <section id="panel-rules" class="panel">
+      <div class="grid-2">
+        <div class="card">
+          <strong>KOReader 电子书格式支持清单</strong>
+          <ul>
+            <li><span class="tag-ok">完美推荐：</span>无加密 <code>EPUB</code>、<code>TXT</code>、<code>MD</code>、<code>DOCX</code>、<code>RTF</code>、<code>HTML</code>、<code>FB2</code>、<code>CHM</code></li>
+            <li><span class="tag-warn">原生可用：</span><code>PDF</code>、<code>DjVu</code>（支持裁边重排）、无加密 <code>MOBI</code>、漫画包 <code>CBZ</code> / <code>CBR</code></li>
+            <li><span class="tag-err">不支持（服务端自动过滤）：</span>亚马逊专有 <code>AZW3</code>、<code>KFX</code> 及任何带 DRM 加密文件</li>
+          </ul>
+        </div>
+        <div class="card">
+          <strong>删除与归档机制（单向只增不删，保护笔记）</strong>
+          <ul>
+            <li><strong>正常看完的长文章：</strong>读到末页点「移至已读」，Kindle 移入 <code>已读/</code> 并回传电脑归档到 <code>read/</code>；此后删 Kindle 绝不再重下。</li>
+            <li><strong>未读完想删的长文章：</strong>电脑 <code>data/inbox/</code> 与 Kindle <code>文章/</code> 两边删除即可。</li>
+            <li><strong>看完想删的电子书：</strong>电脑 <code>data/books/</code>（删除或移走备份）与 Kindle <code>电子书/</code> 两边清理即可。</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <footer>Long Article for Kindle · 本地隐私优先 · 纯标准库与原生浏览器能力构建</footer>
+  </div>
+
+  <script>
+    const STEPS = [
+      {
+        title: '1. Chrome 扩展采集网页 / X 长文章，或批量转换本地 Obsidian 笔记',
+        badge: 'chrome_extension/',
+        desc: '支持普通网页、X Articles（自动过滤普通推文与串推），以及本地 Obsidian 仓库多选勾选/全选当前筛选结果，按顺序自动打包正文与本地图片为标准 EPUB3；正式电子书可直接拖入电脑 data/books/。',
+        code: 'POST /api/upload\n{\n  "filename": "deep-dive.epub",\n  "title": "深度长文示例",\n  "folder": "AI/大模型",\n  "content_base64": "<EPUB3 Base64>"\n}'
+      },
+      {
+        title: '2. 原生弹窗选择或新建分类子文件夹',
+        badge: 'POST /api/folders/pick',
+        desc: '点击「选择 / 新建分类文件夹」按钮，直接唤起电脑原生文件夹选择框并自动定位到 inbox/ 目录。选中已有分类或当场新建子文件夹后，由 Chrome Service Worker 后台接收并持久化，彻底规避弹窗失焦丢状态的问题。',
+        code: 'sync_server/data/\n├── inbox/AI/大模型/deep-dive.epub\n└── books/历史/明朝那些事儿.epub'
+      },
+      {
+        title: '3. 电脑端零第三方依赖 Python HTTP 服务',
+        badge: 'sync_server/ (0.0.0.0:8765)',
+        desc: '基于 Python 3 标准库 ThreadingHTTPServer 运行，递归扫描文章与电子书子文件夹；64 KiB 分块流式下载稳定支持大体积 PDF/EPUB；所有相对路径均做严格穿越防护。',
+        code: 'GET  /health                     -> { ok, unread_count, books_count }\nGET  /api/folders                -> { folders: ["AI", "AI/大模型"] }\nGET  /api/articles?status=unread -> 递归未读列表（相对 POSIX 路径）\nGET  /api/books                  -> 递归电子书列表（自动排除 .azw3/.kfx）'
+      },
+      {
+        title: '4. Kindle 主页一键全部同步 & 保留分类自动归档',
+        badge: 'koreader_plugin/articlesync.koplugin',
+        desc: 'Kindle 连上同一局域网 Wi-Fi，在主页点「一键全部同步」，自动在 /mnt/us/documents/文章/ 与 电子书/ 下建好一致的子文件夹并增量拉取；长文章读到最后一页弹窗确认归档，保留分类移入 已读/ 并回传电脑（离线自动入队补传）。',
+        code: '/mnt/us/documents/文章/AI/大模型/deep-dive.epub\n  ──(读完点「移至已读」)──▶\n/mnt/us/documents/已读/AI/大模型/deep-dive.epub + POST /api/articles/.../mark-read'
+      }
+    ];
+
+    const KINDLE_ACTIONS = {
+      articles: {
+        title: '📄 打开 /mnt/us/documents/文章/',
+        body: '一键进入未读长文章目录，完整呈现从电脑同步过来的分类子文件夹，内置 SimpleUI 防抢焦保护，切换目录不会被主页盖回。'
+      },
+      books: {
+        title: '📚 打开 /mnt/us/documents/电子书/',
+        body: '一键进入局域网同步的正式电子书库（支持 EPUB、PDF、MOBI 等及子文件夹分类）。读完后长期保留，不会触发自动归档移走。'
+      },
+      read: {
+        title: '✅ 打开 /mnt/us/documents/已读/',
+        body: '查看已读完并自动归档的长文章与 .sdr 划线笔记，保留原始分类结构，随时回看或手动清理。'
+      },
+      sync: {
+        title: '🔄 一键全部同步（Dispatcher: articlesync_sync_all）',
+        body: '点击一次依次执行：① 补传离线已读队列 → ② 增量同步未读文章（含子目录）→ ③ 增量同步电子书（含子目录），最后弹出统一汇总结果。'
+      },
+      ip: {
+        title: '🌐 同步地址（Dispatcher: articlesync_set_server_url）',
+        body: '直接弹出紧凑的局域网服务地址输入框，更换 Wi-Fi 或电脑 IP 变化时一秒修改保存。'
+      }
+    };
+
+    let currentStep = 0;
+
+    function renderStep(idx) {
+      currentStep = (idx + STEPS.length) % STEPS.length;
+      const s = STEPS[currentStep];
+      document.getElementById('step-title').textContent = s.title;
+      document.getElementById('step-badge').textContent = s.badge;
+      document.getElementById('step-desc').textContent = s.desc;
+      document.getElementById('step-code').textContent = s.code;
+      document.querySelectorAll('.step-card').forEach((c, i) => {
+        c.classList.toggle('active', i === currentStep);
+      });
+    }
+
+    function renderKindle(key) {
+      const info = KINDLE_ACTIONS[key];
+      document.getElementById('k-title').textContent = info.title;
+      document.getElementById('k-body').textContent = info.body;
+      document.querySelectorAll('.k-btn').forEach(b => {
+        b.classList.toggle('active', b.dataset.kbtn === key);
+      });
+    }
+
+    document.querySelectorAll('.tab-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+        document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+        btn.classList.add('active');
+        document.getElementById('panel-' + btn.dataset.tab).classList.add('active');
+      });
+    });
+
+    document.querySelectorAll('.step-card').forEach(card => {
+      card.addEventListener('click', () => renderStep(Number(card.dataset.step)));
+    });
+    document.getElementById('prev-step').addEventListener('click', () => renderStep(currentStep - 1));
+    document.getElementById('next-step').addEventListener('click', () => renderStep(currentStep + 1));
+
+    document.querySelectorAll('.k-btn').forEach(btn => {
+      btn.addEventListener('click', () => renderKindle(btn.dataset.kbtn));
+    });
+
+    renderStep(0);
+    renderKindle('articles');
+  </script>
+</body>
+</html>

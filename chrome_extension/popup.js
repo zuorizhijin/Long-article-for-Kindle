@@ -8,11 +8,17 @@
   const state = {
     serverUrl: DEFAULT_SERVER_URL,
     serverOnline: false,
+    selectedFolder: '',
+    folders: [],
     webExtracted: null,
     vaultHandle: null,
     mdFiles: [],     // [{ name, relPath, dirParts, handle }]
     imageFiles: [],  // [{ nameLower, relPathLower, handle }]
     selectedMd: null,
+    checkedMdPaths: new Set(),
+    syncedMdPaths: new Set(),
+    failedMdErrors: new Map(),
+    batchRunning: false,
   };
 
   // DOM helpers
@@ -34,13 +40,124 @@
     return String(url || DEFAULT_SERVER_URL).trim().replace(/\/+$/, '');
   }
 
+  function normalizeFolder(val) {
+    return String(val || '')
+      .trim()
+      .replace(/\\/g, '/')
+      .replace(/^\/+|\/+$/g, '');
+  }
+
+  function syncFolderSelect(selectEl, clean) {
+    if (!selectEl) return;
+    if (clean && !Array.from(selectEl.options).some((opt) => opt.value === clean)) {
+      const extra = document.createElement('option');
+      extra.value = clean;
+      extra.textContent = clean;
+      selectEl.appendChild(extra);
+    }
+    selectEl.value = clean;
+  }
+
+  function setFolderValue(val, persist) {
+    const clean = normalizeFolder(val);
+    state.selectedFolder = clean;
+    const label = `保存位置：文章 / ${clean || '根目录'}`;
+    if ($('webFolderText')) $('webFolderText').textContent = label;
+    if ($('mdFolderText')) $('mdFolderText').textContent = label;
+    syncFolderSelect($('webFolderSelect'), clean);
+    syncFolderSelect($('mdFolderSelect'), clean);
+    if (persist) {
+      chrome.storage.local.set({ lastFolder: clean });
+    }
+  }
+
+  function renderFolderOptions() {
+    const selects = [$('webFolderSelect'), $('mdFolderSelect')];
+    for (const sel of selects) {
+      if (!sel) continue;
+      sel.innerHTML = '';
+      const rootOpt = document.createElement('option');
+      rootOpt.value = '';
+      rootOpt.textContent = '根目录';
+      sel.appendChild(rootOpt);
+      for (const folder of state.folders) {
+        const opt = document.createElement('option');
+        opt.value = folder;
+        opt.textContent = folder;
+        sel.appendChild(opt);
+      }
+      syncFolderSelect(sel, state.selectedFolder);
+    }
+  }
+
+  async function handlePickSyncFolder() {
+    const webBtn = $('webPickFolderBtn');
+    const mdBtn = $('mdPickFolderBtn');
+    if (webBtn) webBtn.disabled = true;
+    if (mdBtn) mdBtn.disabled = true;
+    setStatus('请在电脑弹窗中选择或新建分类文件夹...');
+
+    try {
+      const res = await chrome.runtime.sendMessage({
+        type: 'PICK_SYNC_FOLDER',
+        serverUrl: state.serverUrl,
+      });
+      if (!res || !res.ok) {
+        setStatus((res && res.error) || '选择分类文件夹失败', 'err');
+        return;
+      }
+      if (res.cancelled) {
+        setStatus('已取消选择分类文件夹');
+        return;
+      }
+      if (Array.isArray(res.folders)) {
+        state.folders = res.folders;
+        renderFolderOptions();
+      } else {
+        fetchFolders();
+      }
+      setFolderValue(res.folder || '', false);
+      const destLabel = res.folder ? `文章 / ${res.folder}` : '文章 / 根目录';
+      setStatus(`已选择保存位置：${destLabel}`, 'ok');
+    } catch (err) {
+      setStatus('选择分类文件夹失败：' + (err && err.message ? err.message : err), 'err');
+    } finally {
+      if (webBtn) webBtn.disabled = false;
+      if (mdBtn) mdBtn.disabled = false;
+    }
+  }
+
+  async function fetchFolders() {
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 3000);
+      const resp = await fetch(`${state.serverUrl}/api/folders`, {
+        method: 'GET',
+        signal: controller.signal,
+      });
+      clearTimeout(timer);
+      if (!resp.ok) return;
+      const data = await resp.json();
+      if (data && Array.isArray(data.folders)) {
+        state.folders = data.folders;
+        renderFolderOptions();
+      }
+    } catch (_err) {
+      // Ignore folder fetch errors when offline
+    }
+  }
+
   async function loadSettings() {
     return new Promise((resolve) => {
-      chrome.storage.local.get({ serverUrl: DEFAULT_SERVER_URL }, (items) => {
-        state.serverUrl = normalizeServerUrl(items.serverUrl || DEFAULT_SERVER_URL);
-        $('serverUrlInput').value = state.serverUrl;
-        resolve();
-      });
+      chrome.storage.local.get(
+        { serverUrl: DEFAULT_SERVER_URL, lastFolder: '' },
+        (items) => {
+          state.serverUrl = normalizeServerUrl(items.serverUrl || DEFAULT_SERVER_URL);
+          $('serverUrlInput').value = state.serverUrl;
+          setFolderValue(items.lastFolder || '', false);
+          resolve();
+        }
+      );
     });
   }
 
@@ -75,6 +192,7 @@
         const count = typeof data.unread_count === 'number' ? data.unread_count : 0;
         text.textContent = `在线 · 未读 ${count}`;
         updateFallbackHighlights();
+        fetchFolders();
         return true;
       }
       throw new Error('Invalid health payload');
@@ -161,17 +279,22 @@
     }
   }
 
-  async function uploadEpubToServer(epubBytes, filename, title, sourceUrl) {
+  async function uploadEpubToServer(epubBytes, filename, title, sourceUrl, folder) {
     const epubBase64 = EpubBuilder.uint8ArrayToBase64(epubBytes);
+    const cleanFolder = normalizeFolder(folder);
+    const payload = {
+      filename,
+      epub_base64: epubBase64,
+      title,
+      source_url: sourceUrl || '',
+    };
+    if (cleanFolder) {
+      payload.folder = cleanFolder;
+    }
     const resp = await fetch(`${state.serverUrl}/api/upload`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        filename,
-        epub_base64: epubBase64,
-        title,
-        source_url: sourceUrl || '',
-      }),
+      body: JSON.stringify(payload),
     });
     if (!resp.ok) {
       const text = await resp.text().catch(() => '');
@@ -304,9 +427,11 @@
     try {
       const { epubBytes, filename, title, sourceUrl } = await buildWebEpub();
       if (sendToServer) {
+        const folder = state.selectedFolder;
         setStatus('正在发送到电脑同步服务...');
-        const res = await uploadEpubToServer(epubBytes, filename, title, sourceUrl);
-        setStatus(`已成功发送：${res.filename || filename}`, 'ok');
+        const res = await uploadEpubToServer(epubBytes, filename, title, sourceUrl, folder);
+        const destLabel = folder ? `到「${folder}」分类` : '到根目录';
+        setStatus(`已成功发送${destLabel}：${res.filename || filename}`, 'ok');
         checkServerHealth();
       } else {
         triggerBlobDownload(epubBytes, filename);
@@ -363,14 +488,48 @@
     mdFiles.sort((a, b) => a.relPath.localeCompare(b.relPath, 'zh-CN'));
     state.mdFiles = mdFiles;
     state.imageFiles = imageFiles;
+    state.selectedMd = null;
+    state.checkedMdPaths.clear();
+    state.syncedMdPaths.clear();
+    state.failedMdErrors.clear();
+  }
+
+  function getFilteredMdFiles(filterText) {
+    const q = String(filterText !== undefined ? filterText : $('mdSearchInput').value || '')
+      .trim()
+      .toLowerCase();
+    return q
+      ? state.mdFiles.filter((f) => f.relPath.toLowerCase().includes(q))
+      : state.mdFiles;
+  }
+
+  function updateBatchBar(matchedFiles) {
+    const matched = matchedFiles || getFilteredMdFiles();
+    const totalChecked = state.checkedMdPaths.size;
+    $('mdCheckedCount').textContent = `已选 ${totalChecked} 篇`;
+    const batchBtn = $('mdBatchSendBtn');
+    batchBtn.textContent = `批量同步 (${totalChecked})`;
+    batchBtn.disabled = state.batchRunning || totalChecked === 0;
+
+    const toggleBtn = $('mdToggleAllBtn');
+    const allVisibleChecked =
+      matched.length > 0 && matched.every((f) => state.checkedMdPaths.has(f.relPath));
+    toggleBtn.textContent = allVisibleChecked ? '取消全选' : '全选';
+    toggleBtn.disabled = state.batchRunning || matched.length === 0;
+  }
+
+  function toggleMdChecked(relPath) {
+    if (state.batchRunning) return;
+    if (state.checkedMdPaths.has(relPath)) {
+      state.checkedMdPaths.delete(relPath);
+    } else {
+      state.checkedMdPaths.add(relPath);
+    }
   }
 
   function renderMdFileList(filterText) {
     const listEl = $('mdFileList');
-    const q = String(filterText || '').trim().toLowerCase();
-    const matched = q
-      ? state.mdFiles.filter((f) => f.relPath.toLowerCase().includes(q))
-      : state.mdFiles;
+    const matched = getFilteredMdFiles(filterText);
 
     $('mdFileCount').textContent = `共 ${state.mdFiles.length} 篇笔记，匹配 ${matched.length} 篇（显示前 100 篇）`;
     listEl.innerHTML = '';
@@ -381,17 +540,60 @@
       if (state.selectedMd && state.selectedMd.relPath === item.relPath) {
         li.className = 'selected';
       }
+
+      const checkbox = document.createElement('input');
+      checkbox.type = 'checkbox';
+      checkbox.checked = state.checkedMdPaths.has(item.relPath);
+      checkbox.disabled = state.batchRunning;
+      checkbox.addEventListener('click', (e) => {
+        e.stopPropagation();
+        toggleMdChecked(item.relPath);
+        updateBatchBar(matched);
+      });
+
+      const mainDiv = document.createElement('div');
+      mainDiv.className = 'file-item-main';
+
+      const titleRow = document.createElement('div');
+      titleRow.className = 'file-title-row';
+
       const titleSpan = document.createElement('span');
       titleSpan.textContent = item.name.replace(/\.md$/i, '');
+      titleRow.appendChild(titleSpan);
+
+      if (state.syncedMdPaths.has(item.relPath)) {
+        const badge = document.createElement('span');
+        badge.className = 'badge-synced';
+        badge.textContent = '已同步';
+        titleRow.appendChild(badge);
+      } else if (state.failedMdErrors.has(item.relPath)) {
+        const badge = document.createElement('span');
+        badge.className = 'badge-failed';
+        badge.textContent = '失败';
+        badge.title = state.failedMdErrors.get(item.relPath);
+        titleRow.appendChild(badge);
+      }
+
       const pathSpan = document.createElement('span');
       pathSpan.className = 'file-path';
-      pathSpan.textContent = item.relPath;
-      li.appendChild(titleSpan);
-      li.appendChild(pathSpan);
+      const errMsg = state.failedMdErrors.get(item.relPath);
+      pathSpan.textContent = errMsg ? `${item.relPath} · ${errMsg}` : item.relPath;
 
-      li.addEventListener('click', () => selectMdFile(item));
+      mainDiv.appendChild(titleRow);
+      mainDiv.appendChild(pathSpan);
+
+      li.appendChild(checkbox);
+      li.appendChild(mainDiv);
+
+      li.addEventListener('click', () => {
+        if (state.batchRunning) return;
+        toggleMdChecked(item.relPath);
+        selectMdFile(item);
+      });
       listEl.appendChild(li);
     }
+
+    updateBatchBar(matched);
   }
 
   async function selectMdFile(item) {
@@ -480,22 +682,22 @@
     }
   }
 
-  async function buildObsidianEpub() {
-    if (!state.selectedMd) throw new Error('请先选择一篇 .md 笔记');
-    const file = await state.selectedMd.handle.getFile();
+  async function buildObsidianEpubForItem(item, overrideTitle, onProgress) {
+    if (!item) throw new Error('请先选择一篇 .md 笔记');
+    const file = await item.handle.getFile();
     const mdText = await file.text();
-    const fallbackTitle = state.selectedMd.name.replace(/\.md$/i, '');
+    const fallbackTitle = item.name.replace(/\.md$/i, '');
     const parsed = MarkdownConverter.convertMarkdown(mdText, fallbackTitle);
 
-    const title = $('mdTitleInput').value.trim() || parsed.title;
+    const title = (overrideTitle && overrideTitle.trim()) || parsed.title;
     let bodyHtml = parsed.html;
     const images = [];
 
     if (parsed.imageRefs.length > 0) {
-      setStatus(`正在解析并嵌入图片 (0/${parsed.imageRefs.length})...`);
+      if (onProgress) onProgress(`正在解析并嵌入图片 (0/${parsed.imageRefs.length})...`);
       for (let i = 0; i < parsed.imageRefs.length; i++) {
         const ref = parsed.imageRefs[i];
-        const imgObj = await resolveLocalObsidianImage(ref.rawPath, state.selectedMd.dirParts);
+        const imgObj = await resolveLocalObsidianImage(ref.rawPath, item.dirParts);
         if (imgObj && imgObj.data) {
           const { ext, mime } = EpubBuilder.guessImageExtension(
             imgObj.mimeType,
@@ -513,12 +715,12 @@
             .split(ref.token)
             .join(`<span class="muted-small">[图片未找到: ${EpubBuilder.escapeXml(ref.rawPath)}]</span>`);
         }
-        setStatus(`正在解析并嵌入图片 (${i + 1}/${parsed.imageRefs.length})...`);
+        if (onProgress) onProgress(`正在解析并嵌入图片 (${i + 1}/${parsed.imageRefs.length})...`);
       }
     }
 
-    setStatus('正在打包 EPUB...');
-    const sourceUrl = `obsidian://${state.selectedMd.relPath}`;
+    if (onProgress) onProgress('正在打包 EPUB...');
+    const sourceUrl = `obsidian://${item.relPath}`;
     const epubBytes = await EpubBuilder.buildEpub({
       title,
       author: parsed.author,
@@ -530,15 +732,28 @@
     return { epubBytes, filename, title, sourceUrl };
   }
 
+  async function buildObsidianEpub() {
+    const titleOverride = $('mdTitleInput').value.trim();
+    return buildObsidianEpubForItem(state.selectedMd, titleOverride, (msg) => setStatus(msg));
+  }
+
   async function handleObsidianAction(sendToServer) {
     $('mdSendBtn').disabled = true;
     $('mdDownloadBtn').disabled = true;
     try {
       const { epubBytes, filename, title, sourceUrl } = await buildObsidianEpub();
       if (sendToServer) {
+        const folder = state.selectedFolder;
         setStatus('正在发送到电脑同步服务...');
-        const res = await uploadEpubToServer(epubBytes, filename, title, sourceUrl);
-        setStatus(`已成功发送：${res.filename || filename}`, 'ok');
+        const res = await uploadEpubToServer(epubBytes, filename, title, sourceUrl, folder);
+        if (state.selectedMd) {
+          state.syncedMdPaths.add(state.selectedMd.relPath);
+          state.failedMdErrors.delete(state.selectedMd.relPath);
+          state.checkedMdPaths.delete(state.selectedMd.relPath);
+          renderMdFileList();
+        }
+        const destLabel = folder ? `到「${folder}」分类` : '到根目录';
+        setStatus(`已成功发送${destLabel}：${res.filename || filename}`, 'ok');
         checkServerHealth();
       } else {
         triggerBlobDownload(epubBytes, filename);
@@ -548,10 +763,67 @@
       setStatus((err.message || String(err)) + '（可点击「下载 EPUB」保存到本地）', 'err');
       updateFallbackHighlights();
     } finally {
+      if (state.selectedMd && !state.batchRunning) {
+        $('mdSendBtn').disabled = false;
+        $('mdDownloadBtn').disabled = false;
+      }
+    }
+  }
+
+  async function handleObsidianBatchSync() {
+    if (state.batchRunning) return;
+    const targets = state.mdFiles.filter((f) => state.checkedMdPaths.has(f.relPath));
+    if (targets.length === 0) return;
+
+    const folder = state.selectedFolder;
+    state.batchRunning = true;
+    $('mdSendBtn').disabled = true;
+    $('mdDownloadBtn').disabled = true;
+    renderMdFileList();
+
+    let okCount = 0;
+    let failCount = 0;
+    const failDetails = [];
+
+    try {
+      for (let i = 0; i < targets.length; i++) {
+        const item = targets[i];
+        const shortName = item.name.replace(/\.md$/i, '');
+        setStatus(`正在同步 ${i + 1}/${targets.length}：${shortName}...`);
+        try {
+          const { epubBytes, filename, title, sourceUrl } = await buildObsidianEpubForItem(item, '');
+          await uploadEpubToServer(epubBytes, filename, title, sourceUrl, folder);
+          okCount++;
+          state.checkedMdPaths.delete(item.relPath);
+          state.syncedMdPaths.add(item.relPath);
+          state.failedMdErrors.delete(item.relPath);
+        } catch (err) {
+          failCount++;
+          const reason = err && err.message ? err.message : String(err);
+          state.failedMdErrors.set(item.relPath, reason);
+          failDetails.push(`${shortName}: ${reason}`);
+        }
+      }
+    } finally {
+      state.batchRunning = false;
       if (state.selectedMd) {
         $('mdSendBtn').disabled = false;
         $('mdDownloadBtn').disabled = false;
       }
+      renderMdFileList();
+      checkServerHealth();
+    }
+
+    const destLabel = folder ? `到「${folder}」分类` : '到根目录';
+    if (failCount === 0) {
+      setStatus(`批量同步完成（${destLabel}）：成功 ${okCount} 篇，失败 0 篇`, 'ok');
+    } else {
+      const previewErr = failDetails.slice(0, 2).join('；');
+      setStatus(
+        `批量同步完成（${destLabel}）：成功 ${okCount} 篇，失败 ${failCount} 篇（失败项已保留勾选，可直接重试：${previewErr}）`,
+        'err'
+      );
+      updateFallbackHighlights();
     }
   }
 
@@ -573,6 +845,22 @@
 
     $('tabBtnWeb').addEventListener('click', () => switchTab('web'));
     $('tabBtnObsidian').addEventListener('click', () => switchTab('obsidian'));
+
+    $('webPickFolderBtn').addEventListener('click', handlePickSyncFolder);
+    $('mdPickFolderBtn').addEventListener('click', handlePickSyncFolder);
+    $('webFolderSelect').addEventListener('change', (e) => setFolderValue(e.target.value, true));
+    $('mdFolderSelect').addEventListener('change', (e) => setFolderValue(e.target.value, true));
+    $('webFolderRootBtn').addEventListener('click', () => setFolderValue('', true));
+    $('mdFolderRootBtn').addEventListener('click', () => setFolderValue('', true));
+
+    if (chrome.storage && chrome.storage.onChanged) {
+      chrome.storage.onChanged.addListener((changes, areaName) => {
+        if (areaName === 'local' && changes.lastFolder) {
+          setFolderValue(changes.lastFolder.newValue || '', false);
+          fetchFolders();
+        }
+      });
+    }
 
     $('reExtractBtn').addEventListener('click', extractActiveTab);
     $('webSendBtn').addEventListener('click', () => handleWebAction(true));
@@ -611,6 +899,21 @@
     $('mdSearchInput').addEventListener('input', (e) => {
       renderMdFileList(e.target.value);
     });
+
+    $('mdToggleAllBtn').addEventListener('click', () => {
+      if (state.batchRunning) return;
+      const matched = getFilteredMdFiles();
+      if (matched.length === 0) return;
+      const allVisibleChecked = matched.every((f) => state.checkedMdPaths.has(f.relPath));
+      if (allVisibleChecked) {
+        for (const f of matched) state.checkedMdPaths.delete(f.relPath);
+      } else {
+        for (const f of matched) state.checkedMdPaths.add(f.relPath);
+      }
+      renderMdFileList();
+    });
+
+    $('mdBatchSendBtn').addEventListener('click', handleObsidianBatchSync);
 
     $('mdSendBtn').addEventListener('click', () => handleObsidianAction(true));
     $('mdDownloadBtn').addEventListener('click', () => handleObsidianAction(false));

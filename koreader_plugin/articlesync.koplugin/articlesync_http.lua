@@ -8,6 +8,7 @@ local HttpClient = {}
 
 local CONNECT_TIMEOUT = 5
 local READ_TIMEOUT = 20
+local BOOK_READ_TIMEOUT = 120
 
 function HttpClient.urlEncode(str)
     if not str then
@@ -16,6 +17,17 @@ function HttpClient.urlEncode(str)
     return (tostring(str):gsub("([^%w%-%_%.%~])", function(c)
         return string.format("%%%02X", string.byte(c))
     end))
+end
+
+function HttpClient.encodePathSegments(rel_path)
+    if not rel_path then
+        return ""
+    end
+    local parts = {}
+    for seg in tostring(rel_path):gmatch("[^/]+") do
+        table.insert(parts, HttpClient.urlEncode(seg))
+    end
+    return table.concat(parts, "/")
 end
 
 local function normalizeBaseUrl(base_url)
@@ -90,32 +102,7 @@ local function requestJson(method, url, body_tbl)
     return true, data
 end
 
-function HttpClient.checkHealth(base_url)
-    local url = normalizeBaseUrl(base_url) .. "/health"
-    local ok, data = requestJson("GET", url, nil)
-    if not ok then
-        return false, data
-    end
-    if not data.ok then
-        return false, "Server health check returned ok=false"
-    end
-    return true, data
-end
-
-function HttpClient.fetchUnreadList(base_url)
-    local url = normalizeBaseUrl(base_url) .. "/api/articles?status=unread"
-    local ok, data = requestJson("GET", url, nil)
-    if not ok then
-        return false, data
-    end
-    if type(data.articles) ~= "table" then
-        return false, "Missing articles list in response"
-    end
-    return true, data.articles
-end
-
-function HttpClient.downloadArticle(base_url, filename, dest_path)
-    local url = normalizeBaseUrl(base_url) .. "/api/articles/" .. HttpClient.urlEncode(filename)
+local function downloadToFile(url, dest_path, read_timeout)
     local part_path = dest_path .. ".part"
 
     os.remove(part_path)
@@ -124,7 +111,7 @@ function HttpClient.downloadArticle(base_url, filename, dest_path)
         return false, "Cannot open file for writing: " .. tostring(open_err)
     end
 
-    socketutil:set_timeout(CONNECT_TIMEOUT, READ_TIMEOUT)
+    socketutil:set_timeout(CONNECT_TIMEOUT, read_timeout or READ_TIMEOUT)
     local ok, res, code, _resp_headers, status_line = pcall(function()
         return http.request({
             url = url,
@@ -173,8 +160,54 @@ function HttpClient.downloadArticle(base_url, filename, dest_path)
     return true, size
 end
 
-function HttpClient.markRead(base_url, filename)
-    local url = normalizeBaseUrl(base_url) .. "/api/articles/" .. HttpClient.urlEncode(filename) .. "/mark-read"
+function HttpClient.checkHealth(base_url)
+    local url = normalizeBaseUrl(base_url) .. "/health"
+    local ok, data = requestJson("GET", url, nil)
+    if not ok then
+        return false, data
+    end
+    if not data.ok then
+        return false, "Server health check returned ok=false"
+    end
+    return true, data
+end
+
+function HttpClient.fetchUnreadList(base_url)
+    local url = normalizeBaseUrl(base_url) .. "/api/articles?status=unread"
+    local ok, data = requestJson("GET", url, nil)
+    if not ok then
+        return false, data
+    end
+    if type(data.articles) ~= "table" then
+        return false, "Missing articles list in response"
+    end
+    return true, data.articles
+end
+
+function HttpClient.downloadArticle(base_url, rel_path, dest_path)
+    local url = normalizeBaseUrl(base_url) .. "/api/articles/" .. HttpClient.encodePathSegments(rel_path)
+    return downloadToFile(url, dest_path, READ_TIMEOUT)
+end
+
+function HttpClient.listBooks(base_url)
+    local url = normalizeBaseUrl(base_url) .. "/api/books"
+    local ok, data = requestJson("GET", url, nil)
+    if not ok then
+        return false, data
+    end
+    if type(data.books) ~= "table" then
+        return false, "Missing books list in response"
+    end
+    return true, data.books
+end
+
+function HttpClient.downloadBook(base_url, rel_path, dest_path)
+    local url = normalizeBaseUrl(base_url) .. "/api/books/" .. HttpClient.encodePathSegments(rel_path)
+    return downloadToFile(url, dest_path, BOOK_READ_TIMEOUT)
+end
+
+function HttpClient.markRead(base_url, rel_path)
+    local url = normalizeBaseUrl(base_url) .. "/api/articles/" .. HttpClient.encodePathSegments(rel_path) .. "/mark-read"
     local ok, data = requestJson("POST", url, nil)
     if not ok then
         return false, data

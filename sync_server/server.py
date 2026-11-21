@@ -11,18 +11,55 @@ import binascii
 import email.parser
 import email.policy
 import json
+import mimetypes
 import os
 import signal
+import subprocess
 import sys
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Optional
 
-from state_store import StateStore, is_safe_epub_name
+from state_store import (
+    BookLibrary,
+    StateStore,
+    is_safe_book_name,
+    is_safe_epub_name,
+    sanitize_rel_folder,
+)
 
 BASE_DIR = Path(__file__).resolve().parent
 DEFAULT_CONFIG_PATH = BASE_DIR / "config.json"
+STREAM_CHUNK_SIZE = 65536
+
+_BOOK_MIME_OVERRIDES = {
+    ".epub": "application/epub+zip",
+    ".pdf": "application/pdf",
+    ".mobi": "application/x-mobipocket-ebook",
+    ".txt": "text/plain; charset=utf-8",
+    ".md": "text/markdown; charset=utf-8",
+    ".html": "text/html; charset=utf-8",
+    ".htmlz": "application/zip",
+    ".fb2": "application/x-fictionbook+xml",
+    ".djvu": "image/vnd.djvu",
+    ".cbz": "application/vnd.comicbook+zip",
+    ".cbr": "application/vnd.comicbook-rar",
+    ".cbt": "application/x-tar",
+    ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ".doc": "application/msword",
+    ".rtf": "application/rtf",
+    ".chm": "application/vnd.ms-htmlhelp",
+    ".xps": "application/vnd.ms-xpsdocument",
+}
+
+
+def _guess_book_mime(filename: str) -> str:
+    ext = Path(filename).suffix.lower()
+    if ext in _BOOK_MIME_OVERRIDES:
+        return _BOOK_MIME_OVERRIDES[ext]
+    guessed, _ = mimetypes.guess_type(filename)
+    return guessed or "application/octet-stream"
 
 
 def load_config(config_path: Path) -> dict[str, Any]:
@@ -30,6 +67,7 @@ def load_config(config_path: Path) -> dict[str, Any]:
         "host": "0.0.0.0",
         "port": 8765,
         "data_dir": "data",
+        "books_dir": "data/books",
         "obsidian_vault": "",
         "max_upload_mb": 100,
     }
@@ -64,6 +102,56 @@ def _parse_multipart(content_type: str, body: bytes) -> dict[str, Any]:
     return fields
 
 
+def resolve_picked_inbox_folder(chosen_path: str, inbox_dir: Path) -> Optional[str]:
+    """Resolve a picked directory path relative to inbox_dir.
+
+    Returns None if cancelled (empty path), "" for inbox_dir itself,
+    a normalized relative POSIX path for a subfolder inside inbox_dir,
+    or raises ValueError if outside inbox_dir / invalid segment.
+    """
+    raw = (chosen_path or "").strip()
+    if not raw:
+        return None
+    inbox_resolved = inbox_dir.resolve()
+    chosen_resolved = Path(raw).resolve()
+    if chosen_resolved == inbox_resolved:
+        return ""
+    if not chosen_resolved.is_relative_to(inbox_resolved):
+        raise ValueError("请选择文章同步目录（inbox）或其内部的子文件夹")
+    rel_posix = chosen_resolved.relative_to(inbox_resolved).as_posix()
+    return sanitize_rel_folder(rel_posix)
+
+
+def _run_folder_picker_dialog(inbox_dir: Path) -> str:
+    """Open a topmost native folder picker in an isolated subprocess."""
+    inbox_dir.mkdir(parents=True, exist_ok=True)
+    script = (
+        "import sys, tkinter as tk\n"
+        "from tkinter import filedialog\n"
+        "root = tk.Tk()\n"
+        "root.withdraw()\n"
+        "root.attributes('-topmost', True)\n"
+        "chosen = filedialog.askdirectory(\n"
+        "    parent=root,\n"
+        "    initialdir=sys.argv[1],\n"
+        "    title='选择或新建文章分类子文件夹（须在 inbox 目录内）',\n"
+        "    mustexist=True,\n"
+        ")\n"
+        "root.destroy()\n"
+        "if chosen:\n"
+        "    sys.stdout.buffer.write(chosen.encode('utf-8'))\n"
+    )
+    proc = subprocess.run(
+        [sys.executable, "-c", script, str(inbox_dir.resolve())],
+        capture_output=True,
+        timeout=300,
+    )
+    if proc.returncode != 0:
+        err = proc.stderr.decode("utf-8", errors="replace").strip()
+        raise RuntimeError(err or f"Folder picker exited with code {proc.returncode}")
+    return proc.stdout.decode("utf-8", errors="replace").strip()
+
+
 class KindleSyncHTTPServer(ThreadingHTTPServer):
     """ThreadingHTTPServer carrying shared StateStore and upload limit."""
 
@@ -76,8 +164,10 @@ class KindleSyncHTTPServer(ThreadingHTTPServer):
         RequestHandlerClass: type[BaseHTTPRequestHandler],
         store: StateStore,
         max_upload_bytes: int,
+        books: Optional[BookLibrary] = None,
     ) -> None:
         self.store = store
+        self.books = books if books is not None else BookLibrary(store.data_dir / "books")
         self.max_upload_bytes = max_upload_bytes
         super().__init__(server_address, RequestHandlerClass)
 
@@ -143,6 +233,7 @@ class KindleSyncHandler(BaseHTTPRequestHandler):
         parsed = urllib.parse.urlparse(self.path)
         path = parsed.path
         store: StateStore = self.server.store  # type: ignore[attr-defined]
+        books: BookLibrary = self.server.books  # type: ignore[attr-defined]
 
         if path == "/health":
             self._send_json(
@@ -151,8 +242,55 @@ class KindleSyncHandler(BaseHTTPRequestHandler):
                     "ok": True,
                     "service": "kindle-article-sync",
                     "unread_count": store.unread_count(),
+                    "books_count": books.count_books(),
                 },
             )
+            return
+
+        if path == "/api/folders":
+            self._send_json(200, {"folders": store.list_folders()})
+            return
+
+        if path == "/api/books":
+            self._send_json(200, {"books": books.list_books()})
+            return
+
+        if path.startswith("/api/books/"):
+            raw_name = path[len("/api/books/") :]
+            if not raw_name:
+                self._send_json(404, {"ok": False, "error": "Not found"})
+                return
+            rel_path = urllib.parse.unquote(raw_name)
+            if not is_safe_book_name(rel_path):
+                self._send_json(400, {"ok": False, "error": "Invalid book filename"})
+                return
+            file_path = books.get_book_path(rel_path)
+            if file_path is None:
+                self._send_json(404, {"ok": False, "error": "Book not found"})
+                return
+
+            file_size = file_path.stat().st_size
+            base_name = Path(rel_path).name
+            ascii_fallback = base_name.encode("ascii", "ignore").decode("ascii") or f"book{file_path.suffix}"
+            utf8_quoted = urllib.parse.quote(base_name, safe="")
+            self.send_response(200)
+            self._send_cors_headers()
+            self.send_header("Content-Type", _guess_book_mime(base_name))
+            self.send_header("Content-Length", str(file_size))
+            self.send_header(
+                "Content-Disposition",
+                f'attachment; filename="{ascii_fallback}"; filename*=UTF-8\'\'{utf8_quoted}',
+            )
+            self.end_headers()
+            try:
+                with file_path.open("rb") as f:
+                    while True:
+                        chunk = f.read(STREAM_CHUNK_SIZE)
+                        if not chunk:
+                            break
+                        self.wfile.write(chunk)
+            except (BrokenPipeError, ConnectionResetError):
+                pass
             return
 
         if path == "/api/articles":
@@ -167,21 +305,22 @@ class KindleSyncHandler(BaseHTTPRequestHandler):
 
         if path.startswith("/api/articles/"):
             raw_name = path[len("/api/articles/") :]
-            if "/" in raw_name or not raw_name:
+            if not raw_name:
                 self._send_json(404, {"ok": False, "error": "Not found"})
                 return
-            filename = urllib.parse.unquote(raw_name)
-            if not is_safe_epub_name(filename):
+            rel_path = urllib.parse.unquote(raw_name)
+            if not is_safe_epub_name(rel_path):
                 self._send_json(400, {"ok": False, "error": "Invalid filename"})
                 return
-            file_path = store.get_article_path(filename)
+            file_path = store.get_article_path(rel_path)
             if file_path is None:
                 self._send_json(404, {"ok": False, "error": "Article not found"})
                 return
 
             data = file_path.read_bytes()
-            ascii_fallback = filename.encode("ascii", "ignore").decode("ascii") or "article.epub"
-            utf8_quoted = urllib.parse.quote(filename, safe="")
+            base_name = Path(rel_path).name
+            ascii_fallback = base_name.encode("ascii", "ignore").decode("ascii") or "article.epub"
+            utf8_quoted = urllib.parse.quote(base_name, safe="")
             self.send_response(200)
             self._send_cors_headers()
             self.send_header("Content-Type", "application/epub+zip")
@@ -205,13 +344,41 @@ class KindleSyncHandler(BaseHTTPRequestHandler):
             self._handle_upload(store)
             return
 
+        if path == "/api/folders/pick":
+            length_hdr = self.headers.get("Content-Length")
+            if length_hdr and length_hdr.isdigit() and int(length_hdr) > 0:
+                self.rfile.read(min(int(length_hdr), 1024 * 1024))
+            try:
+                chosen = _run_folder_picker_dialog(store.inbox_dir)
+                rel_folder = resolve_picked_inbox_folder(chosen, store.inbox_dir)
+            except ValueError as exc:
+                self._send_json(400, {"ok": False, "error": str(exc)})
+                return
+            except (subprocess.TimeoutExpired, RuntimeError, OSError) as exc:
+                self._send_json(500, {"ok": False, "error": f"Folder picker failed: {exc}"})
+                return
+
+            if rel_folder is None:
+                self._send_json(200, {"ok": True, "cancelled": True})
+            else:
+                self._send_json(
+                    200,
+                    {
+                        "ok": True,
+                        "cancelled": False,
+                        "folder": rel_folder,
+                        "folders": store.list_folders(),
+                    },
+                )
+            return
+
         if path.startswith("/api/articles/") and path.endswith("/mark-read"):
             inner = path[len("/api/articles/") : -len("/mark-read")]
-            if "/" in inner or not inner:
+            if not inner:
                 self._send_json(404, {"ok": False, "error": "Not found"})
                 return
-            filename = urllib.parse.unquote(inner)
-            if not is_safe_epub_name(filename):
+            rel_path = urllib.parse.unquote(inner)
+            if not is_safe_epub_name(rel_path):
                 self._send_json(400, {"ok": False, "error": "Invalid filename"})
                 return
             # Drain any optional request body cleanly
@@ -219,7 +386,7 @@ class KindleSyncHandler(BaseHTTPRequestHandler):
             if length_hdr and length_hdr.isdigit() and int(length_hdr) > 0:
                 self.rfile.read(min(int(length_hdr), 1024 * 1024))
 
-            if store.mark_read(filename):
+            if store.mark_read(rel_path):
                 self._send_json(200, {"ok": True})
             else:
                 self._send_json(404, {"ok": False, "error": "Article not found"})
@@ -236,6 +403,7 @@ class KindleSyncHandler(BaseHTTPRequestHandler):
         filename = ""
         title = ""
         source_url = ""
+        folder = ""
         epub_bytes: Optional[bytes] = None
 
         try:
@@ -250,6 +418,7 @@ class KindleSyncHandler(BaseHTTPRequestHandler):
                     filename = str(fields.get("filename") or "")
                 title = str(fields.get("title") or "")
                 source_url = str(fields.get("source_url") or "")
+                folder = str(fields.get("folder") or "")
             else:
                 payload = json.loads(body.decode("utf-8"))
                 if not isinstance(payload, dict):
@@ -263,6 +432,7 @@ class KindleSyncHandler(BaseHTTPRequestHandler):
                 filename = str(payload.get("filename") or "")
                 title = str(payload.get("title") or "")
                 source_url = str(payload.get("source_url") or "")
+                folder = str(payload.get("folder") or "")
         except (ValueError, UnicodeDecodeError, json.JSONDecodeError, binascii.Error) as exc:
             self._send_json(400, {"ok": False, "error": f"Invalid upload payload: {exc}"})
             return
@@ -271,12 +441,17 @@ class KindleSyncHandler(BaseHTTPRequestHandler):
             self._send_json(400, {"ok": False, "error": "Invalid EPUB binary (expected ZIP)"})
             return
 
-        record = store.save_uploaded_epub(
-            raw_filename=filename or (title or "article"),
-            epub_bytes=epub_bytes,
-            title=title,
-            source_url=source_url,
-        )
+        try:
+            record = store.save_uploaded_epub(
+                raw_filename=filename or (title or "article"),
+                epub_bytes=epub_bytes,
+                title=title,
+                source_url=source_url,
+                folder=folder,
+            )
+        except ValueError as exc:
+            self._send_json(400, {"ok": False, "error": f"Invalid folder: {exc}"})
+            return
         self._send_json(200, {"ok": True, "filename": record["filename"]})
 
 
@@ -285,14 +460,17 @@ def create_server(
     port: int,
     data_dir: Path,
     max_upload_mb: int = 100,
+    books_dir: Optional[Path] = None,
 ) -> KindleSyncHTTPServer:
     store = StateStore(data_dir)
     store.reconcile()
+    books = BookLibrary(books_dir if books_dir is not None else (data_dir / "books"))
     return KindleSyncHTTPServer(
         (host, port),
         KindleSyncHandler,
         store=store,
         max_upload_bytes=max_upload_mb * 1024 * 1024,
+        books=books,
     )
 
 
@@ -302,6 +480,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument("--host", type=str, default=None)
     parser.add_argument("--port", type=int, default=None)
     parser.add_argument("--data-dir", type=Path, default=None)
+    parser.add_argument("--books-dir", type=Path, default=None)
     args = parser.parse_args(argv)
 
     cfg = load_config(args.config)
@@ -313,12 +492,22 @@ def main(argv: Optional[list[str]] = None) -> int:
         raw_data = Path(str(cfg["data_dir"]))
         data_dir = raw_data if raw_data.is_absolute() else (BASE_DIR / raw_data)
 
+    if args.books_dir is not None:
+        books_dir = args.books_dir
+    elif cfg.get("books_dir"):
+        raw_books = Path(str(cfg["books_dir"]))
+        books_dir = raw_books if raw_books.is_absolute() else (BASE_DIR / raw_books)
+    else:
+        books_dir = data_dir / "books"
+
     max_upload_mb = int(cfg.get("max_upload_mb", 100))
-    httpd = create_server(host, port, data_dir, max_upload_mb=max_upload_mb)
+    httpd = create_server(
+        host, port, data_dir, max_upload_mb=max_upload_mb, books_dir=books_dir
+    )
     bound_host, bound_port = httpd.server_address[:2]
     print(
         f"Kindle Article Sync Server listening on http://{bound_host}:{bound_port} "
-        f"(data_dir={data_dir})",
+        f"(data_dir={data_dir}, books_dir={books_dir})",
         flush=True,
     )
 

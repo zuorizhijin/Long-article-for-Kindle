@@ -53,6 +53,19 @@
         <div id="webSnippet" class="snippet"></div>
       </div>
 
+      <div class="folder-box">
+        <div class="folder-status">
+          <span id="webFolderText">保存位置：文章 / 根目录</span>
+        </div>
+        <div class="folder-row">
+          <button id="webPickFolderBtn" class="btn btn-small" type="button">选择 / 新建分类文件夹</button>
+          <select id="webFolderSelect" class="folder-select" title="快速切换已有分类">
+            <option value="">根目录</option>
+          </select>
+          <button id="webFolderRootBtn" class="btn btn-small" type="button" title="重置为根目录">根目录</button>
+        </div>
+      </div>
+
       <div class="actions">
         <button id="webSendBtn" class="btn btn-primary" disabled>生成 EPUB 并发送到电脑</button>
         <button id="webDownloadBtn" class="btn btn-secondary" disabled>下载 EPUB</button>
@@ -74,6 +87,13 @@
 
       <div id="obsidianSearchWrap" class="hidden">
         <input id="mdSearchInput" type="search" placeholder="搜索 .md 笔记文件名或路径..." />
+        <div class="batch-bar">
+          <div class="batch-left">
+            <button id="mdToggleAllBtn" class="btn btn-small" type="button">全选</button>
+            <span id="mdCheckedCount" class="muted-small">已选 0 篇</span>
+          </div>
+          <button id="mdBatchSendBtn" class="btn btn-small btn-batch" type="button" disabled>批量同步 (0)</button>
+        </div>
         <div id="mdFileCount" class="muted-small"></div>
         <ul id="mdFileList" class="file-list"></ul>
       </div>
@@ -83,6 +103,19 @@
         <input id="mdTitleInput" type="text" />
         <div class="meta-line">
           <span>文件：<strong id="mdSelectedPath">-</strong></span>
+        </div>
+      </div>
+
+      <div class="folder-box">
+        <div class="folder-status">
+          <span id="mdFolderText">保存位置：文章 / 根目录</span>
+        </div>
+        <div class="folder-row">
+          <button id="mdPickFolderBtn" class="btn btn-small" type="button">选择 / 新建分类文件夹</button>
+          <select id="mdFolderSelect" class="folder-select" title="快速切换已有分类">
+            <option value="">根目录</option>
+          </select>
+          <button id="mdFolderRootBtn" class="btn btn-small" type="button" title="重置为根目录">根目录</button>
         </div>
       </div>
 

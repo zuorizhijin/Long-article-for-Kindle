@@ -14,6 +14,26 @@ from typing import Any, Optional
 
 _INVALID_FILENAME_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 
+BOOK_EXTS = {
+    ".epub",
+    ".pdf",
+    ".mobi",
+    ".txt",
+    ".md",
+    ".html",
+    ".htmlz",
+    ".fb2",
+    ".djvu",
+    ".cbz",
+    ".cbr",
+    ".cbt",
+    ".docx",
+    ".doc",
+    ".rtf",
+    ".chm",
+    ".xps",
+}
+
 
 def utc_now_iso() -> str:
     """Return current UTC timestamp in ISO-8601 format."""
@@ -38,15 +58,71 @@ def sanitize_filename(raw_name: str, fallback_stem: str = "article") -> str:
     return name
 
 
+def is_safe_rel_path(rel_path: str, allowed_exts: set[str] | tuple[str, ...]) -> bool:
+    """Validate a relative POSIX path (no traversal, hidden/sdr dirs, or bad ext)."""
+    if not rel_path or "\x00" in rel_path or "\\" in rel_path:
+        return False
+    if rel_path.startswith("/") or rel_path.endswith("/"):
+        return False
+    parts = rel_path.split("/")
+    if any(not p or p in {".", ".."} for p in parts):
+        return False
+    # Reject Windows drive letters like C:foo
+    if ":" in parts[0]:
+        return False
+    for p in parts:
+        if p.startswith(".") or p.lower().endswith(".sdr"):
+            return False
+    return Path(parts[-1]).suffix.lower() in allowed_exts
+
+
+def sanitize_rel_folder(folder: str) -> str:
+    """Normalize and validate an optional relative POSIX subfolder path."""
+    raw = (folder or "").strip().replace("\\", "/")
+    raw = raw.strip("/")
+    if not raw:
+        return ""
+    parts = [p.strip() for p in raw.split("/") if p.strip()]
+    clean_parts: list[str] = []
+    for p in parts:
+        if p in {".", ".."} or ":" in p or p.startswith(".") or p.lower().endswith(".sdr"):
+            raise ValueError(f"Invalid folder segment: {p!r}")
+        cleaned = _INVALID_FILENAME_CHARS.sub("_", p).strip(" .")
+        if not cleaned or cleaned in {".", ".."} or cleaned.startswith(".") or cleaned.lower().endswith(".sdr"):
+            raise ValueError(f"Invalid folder segment: {p!r}")
+        clean_parts.append(cleaned)
+    return "/".join(clean_parts)
+
+
 def is_safe_epub_name(name: str) -> bool:
-    """Validate a requested filename from a URL path without modifying it."""
-    if not name or name in {".", ".."}:
-        return False
-    if "/" in name or "\\" in name or "\x00" in name:
-        return False
-    if ".." in Path(name).parts:
-        return False
-    return name.lower().endswith(".epub")
+    """Validate a requested EPUB relative POSIX path without modifying it."""
+    return is_safe_rel_path(name, {".epub"})
+
+
+def is_safe_book_name(name: str) -> bool:
+    """Validate a requested e-book relative POSIX path (whitelisted ext)."""
+    return is_safe_rel_path(name, BOOK_EXTS)
+
+
+def _iter_rel_files(base_dir: Path, allowed_exts: set[str]) -> list[tuple[str, Path]]:
+    """Recursively yield (relative_posix_path, abs_path) skipping hidden/.sdr dirs."""
+    if not base_dir.is_dir():
+        return []
+    results: list[tuple[str, Path]] = []
+    for root, dirs, files in os.walk(base_dir):
+        dirs[:] = sorted(
+            d for d in dirs if not d.startswith(".") and not d.lower().endswith(".sdr")
+        )
+        root_path = Path(root)
+        for fn in sorted(files):
+            if fn.startswith("."):
+                continue
+            full = root_path / fn
+            if full.suffix.lower() not in allowed_exts:
+                continue
+            rel = full.relative_to(base_dir).as_posix()
+            results.append((rel, full))
+    return results
 
 
 def compute_sha256_bytes(data: bytes) -> str:
@@ -104,10 +180,7 @@ class StateStore:
         changed = False
 
         for folder, status in ((self.inbox_dir, "unread"), (self.read_dir, "read")):
-            if not folder.exists():
-                continue
-            for epub in sorted(folder.glob("*.epub")):
-                fn = epub.name
+            for fn, epub in _iter_rel_files(folder, {".epub"}):
                 stat = epub.stat()
                 if fn not in articles:
                     created = _dt.datetime.fromtimestamp(
@@ -150,25 +223,29 @@ class StateStore:
         epub_bytes: bytes,
         title: str = "",
         source_url: str = "",
+        folder: str = "",
     ) -> dict[str, Any]:
-        """Save uploaded EPUB bytes into inbox/ and record in state.json."""
-        filename = sanitize_filename(raw_filename, fallback_stem=title or "article")
-        dest = self.inbox_dir / filename
+        """Save uploaded EPUB bytes into inbox/[folder/] and record in state.json."""
+        safe_folder = sanitize_rel_folder(folder)
+        safe_base = sanitize_filename(raw_filename, fallback_stem=title or "article")
+        rel_path = f"{safe_folder}/{safe_base}" if safe_folder else safe_base
+        dest = self.inbox_dir / rel_path
         sha256 = compute_sha256_bytes(epub_bytes)
         now = utc_now_iso()
 
         with self._lock:
+            dest.parent.mkdir(parents=True, exist_ok=True)
             dest.write_bytes(epub_bytes)
             # If a previous copy existed in read/, remove stale read copy
-            read_copy = self.read_dir / filename
+            read_copy = self.read_dir / rel_path
             if read_copy.exists():
                 read_copy.unlink()
 
             state = self._read_state()
             articles = state.setdefault("articles", {})
             record = {
-                "filename": filename,
-                "title": (title or "").strip() or Path(filename).stem,
+                "filename": rel_path,
+                "title": (title or "").strip() or Path(safe_base).stem,
                 "source_url": (source_url or "").strip(),
                 "created_at": now,
                 "status": "unread",
@@ -176,9 +253,26 @@ class StateStore:
                 "size": len(epub_bytes),
                 "sha256": sha256,
             }
-            articles[filename] = record
+            articles[rel_path] = record
             self._write_state(state)
             return dict(record)
+
+    save_unread = save_uploaded_epub
+
+    def list_folders(self) -> list[str]:
+        """Return sorted relative POSIX subfolder paths under inbox/."""
+        if not self.inbox_dir.is_dir():
+            return []
+        folders: list[str] = []
+        for root, dirs, _files in os.walk(self.inbox_dir):
+            dirs[:] = sorted(
+                d for d in dirs if not d.startswith(".") and not d.lower().endswith(".sdr")
+            )
+            root_path = Path(root)
+            for d in dirs:
+                rel = (root_path / d).relative_to(self.inbox_dir).as_posix()
+                folders.append(rel)
+        return sorted(folders)
 
     def register_inbox_file(
         self,
@@ -249,25 +343,28 @@ class StateStore:
         return len(self.list_articles(status="unread"))
 
     def get_article_path(self, filename: str) -> Optional[Path]:
-        """Locate an EPUB file in inbox/ or read/."""
+        """Locate an EPUB file in inbox/ or read/ by relative POSIX path."""
         if not is_safe_epub_name(filename):
             return None
-        inbox_file = self.inbox_dir / filename
-        if inbox_file.is_file():
+        inbox_file = (self.inbox_dir / filename).resolve()
+        if inbox_file.is_relative_to(self.inbox_dir) and inbox_file.is_file():
             return inbox_file
-        read_file = self.read_dir / filename
-        if read_file.is_file():
+        read_file = (self.read_dir / filename).resolve()
+        if read_file.is_relative_to(self.read_dir) and read_file.is_file():
             return read_file
         return None
 
     def mark_read(self, filename: str) -> bool:
-        """Move <filename> from inbox/ to read/ and update state.json."""
+        """Move <rel_path> from inbox/ to read/ and update state.json."""
         if not is_safe_epub_name(filename):
             return False
         with self._lock:
-            inbox_file = self.inbox_dir / filename
-            read_file = self.read_dir / filename
+            inbox_file = (self.inbox_dir / filename).resolve()
+            read_file = (self.read_dir / filename).resolve()
+            if not inbox_file.is_relative_to(self.inbox_dir) or not read_file.is_relative_to(self.read_dir):
+                return False
             if inbox_file.is_file():
+                read_file.parent.mkdir(parents=True, exist_ok=True)
                 shutil.move(str(inbox_file), str(read_file))
             elif not read_file.is_file():
                 return False
@@ -292,3 +389,71 @@ class StateStore:
                 }
             self._write_state(state)
             return True
+
+
+class BookLibrary:
+    """Read-only scanner and hash cache for the local e-books directory."""
+
+    def __init__(self, books_dir: Path | str) -> None:
+        self.books_dir = Path(books_dir).resolve()
+        self.books_dir.mkdir(parents=True, exist_ok=True)
+        self._lock = threading.RLock()
+        self._hash_cache: dict[str, tuple[int, int, str]] = {}
+
+    def _iter_book_entries(self) -> list[tuple[str, Path]]:
+        return _iter_rel_files(self.books_dir, BOOK_EXTS)
+
+    def count_books(self) -> int:
+        return len(self._iter_book_entries())
+
+    def list_books(self) -> list[dict[str, Any]]:
+        """Recursively scan books_dir and return metadata sorted by mtime descending."""
+        entries = self._iter_book_entries()
+        results: list[dict[str, Any]] = []
+        seen: set[str] = set()
+
+        for rel_path, entry in entries:
+            seen.add(rel_path)
+            try:
+                stat = entry.stat()
+            except OSError:
+                continue
+
+            cache_key = (stat.st_size, stat.st_mtime_ns)
+            with self._lock:
+                cached = self._hash_cache.get(rel_path)
+            if cached and cached[0] == cache_key[0] and cached[1] == cache_key[1]:
+                sha256 = cached[2]
+            else:
+                sha256 = compute_sha256_file(entry)
+                with self._lock:
+                    self._hash_cache[rel_path] = (cache_key[0], cache_key[1], sha256)
+
+            mtime_iso = _dt.datetime.fromtimestamp(
+                stat.st_mtime, tz=_dt.timezone.utc
+            ).strftime("%Y-%m-%dT%H:%M:%SZ")
+            results.append(
+                {
+                    "filename": rel_path,
+                    "ext": entry.suffix.lower(),
+                    "size": stat.st_size,
+                    "mtime": mtime_iso,
+                    "sha256": sha256,
+                }
+            )
+
+        with self._lock:
+            for stale in [k for k in self._hash_cache if k not in seen]:
+                del self._hash_cache[stale]
+
+        results.sort(key=lambda x: x.get("mtime", ""), reverse=True)
+        return results
+
+    def get_book_path(self, filename: str) -> Optional[Path]:
+        """Locate a whitelisted e-book file inside books_dir by relative POSIX path."""
+        if not is_safe_book_name(filename):
+            return None
+        cand = (self.books_dir / filename).resolve()
+        if not cand.is_relative_to(self.books_dir) or not cand.is_file():
+            return None
+        return cand
