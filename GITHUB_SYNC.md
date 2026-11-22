@@ -66,3 +66,4 @@ git push origin v1.1.0
 |---|---|---|---|---|---|
 | 2026-11-22 | `v1.0.0` | `main` | `65b84fb` | 第一版完整跑通并首次同步：电脑本地 HTTP 服务（`sync_server/`）、Kindle KOReader 插件（`koreader_plugin/`，含 KT2 `ui/uimanager` 等真机修复）、Chrome MV3 扩展（`chrome_extension/`）、KOReader 离线安装脚本（`工具/install_ko.py`）及公开仓库脱敏配置 | 已通过真机端到端同步测试 |
 | 2026-11-22 | `v1.1.0` | `main` | `a6611bd` | 新增本地电子书局域网流式同步（`data/books/`）、Chrome 本地 Obsidian 多选批量同步、原生弹窗选择/新建分类子文件夹（`POST /api/folders/pick`）及全链路多级子文件夹同步与保留分类归档、Kindle 主页 5 键与「一键全部同步 / 同步地址」通用 Dispatcher 快捷动作，并新增交互式项目展示页 [`docs/showcase.html`](docs/showcase.html) | 已通过全链路自动化校验与 Kindle 真机实测 |
+| 2026-11-22 | `v1.2.0` | `main` | `b75a00d` | Chrome 扩展新增「格式转换」第 3 标签页（支持多选/拖拽 `.mobi/.azw3/.azw/.docx/.txt/.html/.rtf/.fb2/.chm/.odt/.epub/.pdf` 一键转换并同步到文章分类子文件夹或电子书目录）；服务端新增 `POST /api/convert-upload`（自动调用 Calibre 转 EPUB）与 `/health` `calibre_available` 检测；新增 `工具/convert_kindle_backup.py` | 已通过 Calibre 实测转换 E2E 与全量语法校验 |
