@@ -30,8 +30,9 @@
     </section>
 
     <nav class="tabs">
-      <button id="tabBtnWeb" class="tab-btn active" data-tab="web">网页 / X 长文章</button>
-      <button id="tabBtnObsidian" class="tab-btn" data-tab="obsidian">本地 Obsidian MD</button>
+      <button id="tabBtnWeb" class="tab-btn active" data-tab="web">网页 / X 文章</button>
+      <button id="tabBtnObsidian" class="tab-btn" data-tab="obsidian">Obsidian MD</button>
+      <button id="tabBtnConvert" class="tab-btn" data-tab="convert">格式转换</button>
     </nav>
 
     <!-- Tab 1: Web / X Articles -->
@@ -122,6 +123,64 @@
       <div class="actions">
         <button id="mdSendBtn" class="btn btn-primary" disabled>转换并发送到电脑</button>
         <button id="mdDownloadBtn" class="btn btn-secondary" disabled>下载 EPUB</button>
+      </div>
+    </main>
+
+    <!-- Tab 3: Format Convert & Upload -->
+    <main id="panelConvert" class="panel hidden">
+      <div id="calibreWarnBox" class="alert alert-warn hidden">
+        电脑端未检测到 Calibre，仅支持直接上传 EPUB（以及存入电子书的 PDF）。
+      </div>
+
+      <div id="convertDropZone" class="drop-zone" tabindex="0">
+        <input
+          id="convertFileInput"
+          type="file"
+          multiple
+          accept=".mobi,.azw3,.azw,.prc,.epub,.txt,.html,.htm,.docx,.doc,.rtf,.fb2,.chm,.odt,.pdf"
+          class="hidden"
+        />
+        <div class="drop-zone-title">点击选择或拖拽电子书/文档到此处</div>
+        <div class="drop-zone-sub">支持 MOBI / AZW3 / EPUB / PDF / DOCX / TXT / HTML 等</div>
+      </div>
+
+      <div id="convertListWrap" class="hidden">
+        <div class="convert-list-header">
+          <span id="convertCountText" class="muted-small">已选 0 个文件</span>
+          <button id="convertClearBtn" class="link-btn" type="button">清空列表</button>
+        </div>
+        <ul id="convertFileList" class="file-list convert-file-list"></ul>
+      </div>
+
+      <div class="target-box">
+        <span class="field-label">同步目标</span>
+        <div class="target-radios">
+          <label class="radio-label">
+            <input type="radio" name="convertTarget" value="inbox" checked />
+            <span>文章（inbox）</span>
+          </label>
+          <label class="radio-label">
+            <input type="radio" name="convertTarget" value="books" />
+            <span>电子书（books）</span>
+          </label>
+        </div>
+      </div>
+
+      <div id="convertFolderBox" class="folder-box">
+        <div class="folder-status">
+          <span id="convertFolderText">保存位置：文章 / 根目录</span>
+        </div>
+        <div class="folder-row">
+          <button id="convertPickFolderBtn" class="btn btn-small" type="button">选择 / 新建分类文件夹</button>
+          <select id="convertFolderSelect" class="folder-select" title="快速切换已有分类">
+            <option value="">根目录</option>
+          </select>
+          <button id="convertFolderRootBtn" class="btn btn-small" type="button" title="重置为根目录">根目录</button>
+        </div>
+      </div>
+
+      <div class="actions">
+        <button id="convertSendBtn" class="btn btn-primary" disabled>转换并同步到电脑 (0)</button>
       </div>
     </main>
 

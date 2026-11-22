@@ -13,9 +13,11 @@ import email.policy
 import json
 import mimetypes
 import os
+import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -26,12 +28,45 @@ from state_store import (
     StateStore,
     is_safe_book_name,
     is_safe_epub_name,
+    sanitize_filename,
     sanitize_rel_folder,
 )
 
 BASE_DIR = Path(__file__).resolve().parent
 DEFAULT_CONFIG_PATH = BASE_DIR / "config.json"
 STREAM_CHUNK_SIZE = 65536
+
+CONVERT_TO_EPUB_EXTS = {
+    ".mobi",
+    ".azw3",
+    ".azw",
+    ".prc",
+    ".txt",
+    ".html",
+    ".htm",
+    ".docx",
+    ".doc",
+    ".rtf",
+    ".fb2",
+    ".chm",
+    ".odt",
+}
+
+_CALIBRE_WIN_PATHS = (
+    Path(r"C:\Program Files\Calibre2\ebook-convert.exe"),
+    Path(r"C:\Program Files (x86)\Calibre2\ebook-convert.exe"),
+)
+
+
+def _find_calibre_convert() -> Optional[str]:
+    """Locate Calibre's ebook-convert binary on PATH or standard Windows paths."""
+    found = shutil.which("ebook-convert")
+    if found:
+        return found
+    for cand in _CALIBRE_WIN_PATHS:
+        if cand.is_file():
+            return str(cand)
+    return None
 
 _BOOK_MIME_OVERRIDES = {
     ".epub": "application/epub+zip",
@@ -204,7 +239,7 @@ class KindleSyncHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def _read_request_body(self) -> Optional[bytes]:
+    def _read_request_body(self, max_bytes_override: Optional[int] = None) -> Optional[bytes]:
         length_hdr = self.headers.get("Content-Length")
         if length_hdr is None:
             self._send_json(411, {"ok": False, "error": "Content-Length required"})
@@ -217,7 +252,7 @@ class KindleSyncHandler(BaseHTTPRequestHandler):
         if length < 0:
             self._send_json(400, {"ok": False, "error": "Negative Content-Length"})
             return None
-        max_bytes = self.server.max_upload_bytes  # type: ignore[attr-defined]
+        max_bytes = max_bytes_override if max_bytes_override is not None else self.server.max_upload_bytes  # type: ignore[attr-defined]
         if length > max_bytes:
             self._send_json(413, {"ok": False, "error": "Payload too large"})
             return None
@@ -243,6 +278,7 @@ class KindleSyncHandler(BaseHTTPRequestHandler):
                     "service": "kindle-article-sync",
                     "unread_count": store.unread_count(),
                     "books_count": books.count_books(),
+                    "calibre_available": _find_calibre_convert() is not None,
                 },
             )
             return
@@ -342,6 +378,11 @@ class KindleSyncHandler(BaseHTTPRequestHandler):
 
         if path == "/api/upload":
             self._handle_upload(store)
+            return
+
+        if path == "/api/convert-upload":
+            books: BookLibrary = self.server.books  # type: ignore[attr-defined]
+            self._handle_convert_upload(store, books)
             return
 
         if path == "/api/folders/pick":
@@ -453,6 +494,138 @@ class KindleSyncHandler(BaseHTTPRequestHandler):
             self._send_json(400, {"ok": False, "error": f"Invalid folder: {exc}"})
             return
         self._send_json(200, {"ok": True, "filename": record["filename"]})
+
+    def _handle_convert_upload(self, store: StateStore, books: BookLibrary) -> None:
+        max_raw = max(self.server.max_upload_bytes, 100 * 1024 * 1024)  # type: ignore[attr-defined]
+        body = self._read_request_body(max_bytes_override=int(max_raw * 1.45))
+        if body is None:
+            return
+
+        try:
+            payload = json.loads(body.decode("utf-8"))
+            if not isinstance(payload, dict):
+                raise ValueError("JSON body must be an object")
+            raw_filename = str(payload.get("filename") or "").strip()
+            if not raw_filename:
+                raise ValueError("Missing filename")
+            b64 = payload.get("content_base64")
+            if not isinstance(b64, str) or not b64.strip():
+                raise ValueError("Missing content_base64")
+            if "," in b64 and b64.lstrip().startswith("data:"):
+                b64 = b64.split(",", 1)[1]
+            src_bytes = base64.b64decode(b64.strip(), validate=True)
+            if not src_bytes:
+                raise ValueError("Empty file content")
+            if len(src_bytes) > max_raw:
+                self._send_json(413, {"ok": False, "error": "文件超过大小限制（最大 100MB）"})
+                return
+
+            target = str(payload.get("target") or "inbox").strip().lower()
+            if target not in {"inbox", "books"}:
+                self._send_json(400, {"ok": False, "error": "target 仅支持 inbox 或 books"})
+                return
+
+            safe_folder = sanitize_rel_folder(str(payload.get("folder") or ""))
+        except (ValueError, UnicodeDecodeError, json.JSONDecodeError, binascii.Error) as exc:
+            self._send_json(400, {"ok": False, "error": f"无效请求参数: {exc}"})
+            return
+
+        # Extract safe basename and validate extension
+        base_only = raw_filename.replace("\\", "/").split("/")[-1].strip()
+        if not base_only or base_only in {".", ".."} or "\x00" in base_only:
+            self._send_json(400, {"ok": False, "error": "无效文件名"})
+            return
+        ext = Path(base_only).suffix.lower()
+        stem = Path(sanitize_filename(f"{Path(base_only).stem}.epub")).stem
+
+        direct_ok = ext == ".epub" or (target == "books" and ext == ".pdf")
+        if not direct_ok and ext not in CONVERT_TO_EPUB_EXTS:
+            if ext == ".kfx":
+                self._send_json(422, {"ok": False, "error": "不支持 .kfx 格式（Amazon 专有/通常带 DRM 加密）"})
+            else:
+                self._send_json(400, {"ok": False, "error": f"不支持的文件格式: {ext or '(无后缀)'}"})
+            return
+
+        converted = False
+        out_ext = ext if direct_ok else ".epub"
+        out_bytes = src_bytes
+
+        if direct_ok:
+            if ext == ".epub" and not src_bytes.startswith(b"PK"):
+                self._send_json(400, {"ok": False, "error": "无效的 EPUB 文件（非 ZIP 格式）"})
+                return
+        else:
+            calibre_bin = _find_calibre_convert()
+            if not calibre_bin:
+                self._send_json(
+                    500,
+                    {"ok": False, "error": "电脑端未安装 Calibre（未找到 ebook-convert），无法转换该格式"},
+                )
+                return
+            try:
+                with tempfile.TemporaryDirectory() as tmpdir:
+                    tmp_path = Path(tmpdir)
+                    src_file = tmp_path / f"input{ext}"
+                    dst_file = tmp_path / "output.epub"
+                    src_file.write_bytes(src_bytes)
+                    proc = subprocess.run(
+                        [calibre_bin, str(src_file), str(dst_file)],
+                        capture_output=True,
+                        timeout=180,
+                    )
+                    if proc.returncode != 0 or not dst_file.is_file() or dst_file.stat().st_size == 0:
+                        combined = (
+                            proc.stderr.decode("utf-8", errors="replace")
+                            + "\n"
+                            + proc.stdout.decode("utf-8", errors="replace")
+                        ).strip()
+                        low = combined.lower()
+                        if any(k in low for k in ("drm", "encrypt", "protected", "kfx")):
+                            msg = "转换失败：文件受 DRM 加密保护或为专有加密格式，无法转换"
+                        else:
+                            snippet = combined.splitlines()[-1][:200] if combined else f"exit code {proc.returncode}"
+                            msg = f"Calibre 转换失败: {snippet}"
+                        self._send_json(422, {"ok": False, "error": msg})
+                        return
+                    out_bytes = dst_file.read_bytes()
+                    converted = True
+            except subprocess.TimeoutExpired:
+                self._send_json(422, {"ok": False, "error": "Calibre 转换超时（超过 180 秒）"})
+                return
+            except OSError as exc:
+                self._send_json(500, {"ok": False, "error": f"转换过程发生系统错误: {exc}"})
+                return
+
+        if target == "inbox":
+            record = store.save_uploaded_epub(
+                raw_filename=f"{stem}.epub",
+                epub_bytes=out_bytes,
+                title=stem,
+                folder=safe_folder,
+            )
+            rel_path = record["filename"]
+        else:
+            safe_base = f"{stem}{out_ext}"
+            rel_path = f"{safe_folder}/{safe_base}" if safe_folder else safe_base
+            dest = (books.books_dir / rel_path).resolve()
+            if not dest.is_relative_to(books.books_dir):
+                self._send_json(400, {"ok": False, "error": "非法目标路径"})
+                return
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            tmp_dest = dest.with_name(f".{dest.name}.tmp")
+            tmp_dest.write_bytes(out_bytes)
+            os.replace(tmp_dest, dest)
+
+        self._send_json(
+            200,
+            {
+                "ok": True,
+                "filename": rel_path,
+                "target": target,
+                "converted": converted,
+                "size": len(out_bytes),
+            },
+        )
 
 
 def create_server(

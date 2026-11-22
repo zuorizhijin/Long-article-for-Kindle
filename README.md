@@ -26,11 +26,11 @@ Kindle KOReader 插件 (articlesync.koplugin)
 
 ## 目录结构
 
-- `sync_server/`：电脑端轻量 Python 3 HTTP 同步服务（支持文章/电子书子文件夹递归扫描、64 KiB 分块流式下载、原生文件夹选择接口 `/api/folders/pick`）、纯标准库 EPUB3 打包器、Obsidian Markdown 转换命令行工具，以及 Windows 启动/开机自启/防火墙放行脚本。
+- `sync_server/`：电脑端轻量 Python 3 HTTP 同步服务（支持文章/电子书子文件夹递归扫描、64 KiB 分块流式下载、原生文件夹选择接口 `/api/folders/pick`、以及调用 Calibre 自动转换 `.mobi/.azw3/.docx/.txt/.html` 等为 EPUB 的 `/api/convert-upload` 接口）、纯标准库 EPUB3 打包器、Obsidian Markdown 转换命令行工具，以及 Windows 启动/开机自启/防火墙放行脚本。
 - `koreader_plugin/`：Kindle 端 KOReader 插件 `articlesync.koplugin`（支持「一键全部同步」、电子书同步、保留子文件夹归档、以及注册 6 个通用 Dispatcher 快捷动作供 SimpleUI 主页/底栏绑定），及自动识别 `Kindle` 盘符并写入局域网 IP 的部署脚本 `install_to_kindle.ps1`。
-- `chrome_extension/`：Manifest V3 Chrome 扩展（免构建直接加载），支持 X 长文章、普通网页与本地 Obsidian 多选批量转 EPUB3，并支持通过电脑原生弹窗选择/新建分类子文件夹。
+- `chrome_extension/`：Manifest V3 Chrome 扩展（免构建直接加载），支持 X 长文章、普通网页、本地 Obsidian 多选批量转 EPUB3，以及「格式转换」标签页拖拽/多选任意本地电子书与文档（`.mobi/.azw3/.docx/.txt/.html/.pdf` 等）一键自动转 EPUB 并同步到指定分类子文件夹。
 - `docs/showcase.html`：零依赖离线可打开的交互式项目展示文档。
-- `工具/install_ko.py`：从电脑向 Kindle 离线安装 KOReader `.kpkg` 的辅助脚本。
+- `工具/`：离线安装 KOReader 脚本 `install_ko.py`，以及批量清洗转换旧 Kindle 备份的脚本 `convert_kindle_backup.py`。
 - `GITHUB_SYNC.md`：本仓库的 GitHub 同步记录与后续更新发版指南。
 
 ## 快速上手（3 步）

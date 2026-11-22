@@ -19,6 +19,9 @@
     syncedMdPaths: new Set(),
     failedMdErrors: new Map(),
     batchRunning: false,
+    calibreAvailable: true,
+    convertFiles: [], // [{ id, file, error }]
+    convertRunning: false,
   };
 
   // DOM helpers
@@ -64,15 +67,17 @@
     const label = `保存位置：文章 / ${clean || '根目录'}`;
     if ($('webFolderText')) $('webFolderText').textContent = label;
     if ($('mdFolderText')) $('mdFolderText').textContent = label;
+    if ($('convertFolderText')) $('convertFolderText').textContent = label;
     syncFolderSelect($('webFolderSelect'), clean);
     syncFolderSelect($('mdFolderSelect'), clean);
+    syncFolderSelect($('convertFolderSelect'), clean);
     if (persist) {
       chrome.storage.local.set({ lastFolder: clean });
     }
   }
 
   function renderFolderOptions() {
-    const selects = [$('webFolderSelect'), $('mdFolderSelect')];
+    const selects = [$('webFolderSelect'), $('mdFolderSelect'), $('convertFolderSelect')];
     for (const sel of selects) {
       if (!sel) continue;
       sel.innerHTML = '';
@@ -93,8 +98,10 @@
   async function handlePickSyncFolder() {
     const webBtn = $('webPickFolderBtn');
     const mdBtn = $('mdPickFolderBtn');
+    const convBtn = $('convertPickFolderBtn');
     if (webBtn) webBtn.disabled = true;
     if (mdBtn) mdBtn.disabled = true;
+    if (convBtn) convBtn.disabled = true;
     setStatus('请在电脑弹窗中选择或新建分类文件夹...');
 
     try {
@@ -124,6 +131,7 @@
     } finally {
       if (webBtn) webBtn.disabled = false;
       if (mdBtn) mdBtn.disabled = false;
+      if (convBtn) convBtn.disabled = false;
     }
   }
 
@@ -188,6 +196,10 @@
       const data = await resp.json();
       if (data && data.ok) {
         state.serverOnline = true;
+        state.calibreAvailable = data.calibre_available !== false;
+        if ($('calibreWarnBox')) {
+          $('calibreWarnBox').classList.toggle('hidden', state.calibreAvailable);
+        }
         badge.className = 'health-badge online';
         const count = typeof data.unread_count === 'number' ? data.unread_count : 0;
         text.textContent = `在线 · 未读 ${count}`;
@@ -212,11 +224,12 @@
 
   // Tab switching
   function switchTab(tabName) {
-    const isWeb = tabName === 'web';
-    $('tabBtnWeb').classList.toggle('active', isWeb);
-    $('tabBtnObsidian').classList.toggle('active', !isWeb);
-    $('panelWeb').classList.toggle('hidden', !isWeb);
-    $('panelObsidian').classList.toggle('hidden', isWeb);
+    $('tabBtnWeb').classList.toggle('active', tabName === 'web');
+    $('tabBtnObsidian').classList.toggle('active', tabName === 'obsidian');
+    $('tabBtnConvert').classList.toggle('active', tabName === 'convert');
+    $('panelWeb').classList.toggle('hidden', tabName !== 'web');
+    $('panelObsidian').classList.toggle('hidden', tabName !== 'obsidian');
+    $('panelConvert').classList.toggle('hidden', tabName !== 'convert');
     setStatus('');
   }
 
@@ -917,6 +930,230 @@
 
     $('mdSendBtn').addEventListener('click', () => handleObsidianAction(true));
     $('mdDownloadBtn').addEventListener('click', () => handleObsidianAction(false));
+
+    // Tab 3: Format Convert
+    $('tabBtnConvert').addEventListener('click', () => switchTab('convert'));
+    $('convertPickFolderBtn').addEventListener('click', handlePickSyncFolder);
+    $('convertFolderSelect').addEventListener('change', (e) => setFolderValue(e.target.value, true));
+    $('convertFolderRootBtn').addEventListener('click', () => setFolderValue('', true));
+
+    const dropZone = $('convertDropZone');
+    const fileInput = $('convertFileInput');
+    dropZone.addEventListener('click', () => {
+      if (!state.convertRunning) fileInput.click();
+    });
+    dropZone.addEventListener('keydown', (e) => {
+      if ((e.key === 'Enter' || e.key === ' ') && !state.convertRunning) {
+        e.preventDefault();
+        fileInput.click();
+      }
+    });
+    dropZone.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      dropZone.classList.add('dragover');
+    });
+    dropZone.addEventListener('dragleave', () => {
+      dropZone.classList.remove('dragover');
+    });
+    dropZone.addEventListener('drop', (e) => {
+      e.preventDefault();
+      dropZone.classList.remove('dragover');
+      if (!state.convertRunning && e.dataTransfer && e.dataTransfer.files) {
+        addConvertFiles(e.dataTransfer.files);
+      }
+    });
+    fileInput.addEventListener('change', (e) => {
+      if (e.target.files) addConvertFiles(e.target.files);
+      fileInput.value = '';
+    });
+    $('convertClearBtn').addEventListener('click', () => {
+      if (state.convertRunning) return;
+      state.convertFiles = [];
+      renderConvertFileList();
+    });
+    for (const radio of document.querySelectorAll('input[name="convertTarget"]')) {
+      radio.addEventListener('change', updateConvertTargetVisibility);
+    }
+    $('convertSendBtn').addEventListener('click', handleConvertUploadAll);
+  }
+
+  // ========================
+  // Mode 4: Format Convert & Upload
+  // ========================
+  const CONVERT_ALLOWED_EXTS = new Set([
+    'mobi', 'azw3', 'azw', 'prc', 'epub', 'txt', 'html', 'htm',
+    'docx', 'doc', 'rtf', 'fb2', 'chm', 'odt', 'pdf',
+  ]);
+
+  function formatFileSize(bytes) {
+    if (bytes < 1024) return bytes + ' B';
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+    return (bytes / (1024 * 1024)).toFixed(2) + ' MB';
+  }
+
+  function getSelectedConvertTarget() {
+    const checked = document.querySelector('input[name="convertTarget"]:checked');
+    return checked ? checked.value : 'inbox';
+  }
+
+  function updateConvertTargetVisibility() {
+    const target = getSelectedConvertTarget();
+    $('convertFolderBox').classList.toggle('hidden', target !== 'inbox');
+  }
+
+  function addConvertFiles(fileList) {
+    let skipped = 0;
+    for (const file of Array.from(fileList)) {
+      const ext = (file.name.split('.').pop() || '').toLowerCase();
+      if (!CONVERT_ALLOWED_EXTS.has(ext)) {
+        skipped++;
+        continue;
+      }
+      const dup = state.convertFiles.some(
+        (item) => item.file.name === file.name && item.file.size === file.size
+      );
+      if (!dup) {
+        state.convertFiles.push({
+          id: `${file.name}_${file.size}_${Math.random().toString(36).slice(2, 7)}`,
+          file,
+          error: '',
+        });
+      }
+    }
+    renderConvertFileList();
+    if (skipped > 0) {
+      setStatus(`已忽略 ${skipped} 个不支持格式的文件`, 'err');
+    } else {
+      setStatus('');
+    }
+  }
+
+  function renderConvertFileList() {
+    const wrap = $('convertListWrap');
+    const listEl = $('convertFileList');
+    const count = state.convertFiles.length;
+
+    wrap.classList.toggle('hidden', count === 0);
+    $('convertCountText').textContent = `已选 ${count} 个文件`;
+    const sendBtn = $('convertSendBtn');
+    sendBtn.textContent = `转换并同步到电脑 (${count})`;
+    sendBtn.disabled = state.convertRunning || count === 0;
+    $('convertClearBtn').disabled = state.convertRunning;
+
+    listEl.innerHTML = '';
+    for (const item of state.convertFiles) {
+      const li = document.createElement('li');
+      const mainDiv = document.createElement('div');
+      mainDiv.className = 'file-item-main';
+
+      const titleRow = document.createElement('div');
+      titleRow.className = 'file-title-row';
+      const ext = (item.file.name.split('.').pop() || '').toUpperCase();
+      const badge = document.createElement('span');
+      badge.className = 'ext-badge';
+      badge.textContent = ext || 'FILE';
+      const nameSpan = document.createElement('span');
+      nameSpan.textContent = item.file.name;
+      titleRow.appendChild(badge);
+      titleRow.appendChild(nameSpan);
+
+      if (item.error) {
+        const errBadge = document.createElement('span');
+        errBadge.className = 'badge-failed';
+        errBadge.textContent = '失败';
+        titleRow.appendChild(errBadge);
+      }
+
+      const meta = document.createElement('div');
+      meta.className = 'convert-meta';
+      meta.textContent = item.error
+        ? `${formatFileSize(item.file.size)} · ${item.error}`
+        : formatFileSize(item.file.size);
+
+      mainDiv.appendChild(titleRow);
+      mainDiv.appendChild(meta);
+
+      const rmBtn = document.createElement('button');
+      rmBtn.type = 'button';
+      rmBtn.className = 'remove-btn';
+      rmBtn.textContent = '×';
+      rmBtn.title = '移除';
+      rmBtn.disabled = state.convertRunning;
+      rmBtn.addEventListener('click', () => {
+        if (state.convertRunning) return;
+        state.convertFiles = state.convertFiles.filter((x) => x.id !== item.id);
+        renderConvertFileList();
+      });
+
+      li.appendChild(mainDiv);
+      li.appendChild(rmBtn);
+      listEl.appendChild(li);
+    }
+  }
+
+  async function handleConvertUploadAll() {
+    if (state.convertRunning || state.convertFiles.length === 0) return;
+
+    const target = getSelectedConvertTarget();
+    const folder = target === 'inbox' ? state.selectedFolder : '';
+    const queue = state.convertFiles.slice();
+
+    state.convertRunning = true;
+    renderConvertFileList();
+
+    let okCount = 0;
+    let failCount = 0;
+    const remaining = [];
+
+    try {
+      for (let i = 0; i < queue.length; i++) {
+        const item = queue[i];
+        setStatus(`正在转换 ${i + 1}/${queue.length}：${item.file.name}...`);
+        try {
+          const buf = await item.file.arrayBuffer();
+          const base64 = EpubBuilder.uint8ArrayToBase64(new Uint8Array(buf));
+          const resp = await fetch(`${state.serverUrl}/api/convert-upload`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              filename: item.file.name,
+              content_base64: base64,
+              target,
+              folder,
+            }),
+          });
+          const data = await resp.json().catch(() => null);
+          if (!resp.ok || !data || !data.ok) {
+            throw new Error((data && data.error) || `服务端错误 (${resp.status})`);
+          }
+          okCount++;
+        } catch (err) {
+          failCount++;
+          item.error = err && err.message ? err.message : String(err);
+          remaining.push(item);
+        }
+      }
+    } finally {
+      state.convertRunning = false;
+      state.convertFiles = remaining;
+      renderConvertFileList();
+      checkServerHealth();
+    }
+
+    if (failCount === 0) {
+      const destLabel =
+        target === 'books'
+          ? '电子书（books）'
+          : folder
+            ? `文章 / ${folder}`
+            : '文章 / 根目录';
+      setStatus(`转换同步完成（${destLabel}）：成功 ${okCount} 个，失败 0 个`, 'ok');
+    } else {
+      setStatus(
+        `转换同步完成：成功 ${okCount} 个，失败 ${failCount} 个（失败项已保留在列表中）`,
+        'err'
+      );
+    }
   }
 
   async function init() {
